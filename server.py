@@ -619,6 +619,132 @@ def get_ee_pose(joint_angles: List[float] = None,
         }
 
 @mcp.tool()
+def control_gripper(command: str) -> Dict[str, Any]:
+    """
+    Control gripper with flexible input commands using ROS2.
+    
+    Args:
+        command: Gripper control command. Can be:
+                - String commands: "open", "close"
+                - Numeric values: "0" to "1100" (representing 0cm to 11cm gripper width)
+                
+    Value meanings:
+        - "open" or "1100" = Fully open (11cm width)
+        - "close" or "0" = Fully closed (0cm width)  
+        - Any value "0"-"1100" = Proportional opening (e.g., "550" = 5.5cm width)
+    
+    Examples:
+        control_gripper("open")          # Fully open gripper
+        control_gripper("close")         # Fully close gripper
+        control_gripper("550")           # Half open (5.5cm width)
+        control_gripper("1100")          # Fully open (same as "open")
+        control_gripper("0")             # Fully closed (same as "close")
+    """
+    try:
+        import subprocess
+        
+        # Convert command to appropriate ROS2 message
+        if isinstance(command, str):
+            if command.lower() == "open":
+                ros_command = "open"
+                numeric_value = 1100
+                width_cm = 11.0
+            elif command.lower() == "close":
+                ros_command = "close" 
+                numeric_value = 0
+                width_cm = 0.0
+            elif command.isdigit() or (command.replace('.', '').isdigit()):
+                # It's a numeric string
+                try:
+                    numeric_value = float(command)
+                    if not (0 <= numeric_value <= 1100):
+                        return {
+                            "status": "error",
+                            "message": f"Numeric value {numeric_value} out of range. Use 0-1100."
+                        }
+                    
+                    # Convert to ROS command string and width
+                    ros_command = str(int(numeric_value))
+                    width_cm = numeric_value / 100.0  # Convert to cm (1100 -> 11cm)
+                    
+                except (ValueError, TypeError):
+                    return {
+                        "status": "error",
+                        "message": f"Invalid numeric command '{command}'. Use number 0-1100."
+                    }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Invalid string command '{command}'. Use 'open', 'close', or numeric value 0-1100."
+                }
+        else:
+            # Direct numeric input
+            try:
+                numeric_value = float(command)
+                if not (0 <= numeric_value <= 1100):
+                    return {
+                        "status": "error",
+                        "message": f"Numeric value {numeric_value} out of range. Use 0-1100."
+                    }
+                
+                ros_command = str(int(numeric_value))
+                width_cm = numeric_value / 100.0
+                
+            except (ValueError, TypeError):
+                return {
+                    "status": "error",
+                    "message": f"Invalid command '{command}'. Use 'open', 'close', or number 0-1100."
+                }
+        
+        # Execute ROS2 command using the same pattern as your other tools
+        cmd = f"source /opt/ros/humble/setup.bash && ros2 topic pub --once /gripper_command std_msgs/String \"{{data: '{ros_command}'}}\""
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                executable='/bin/bash',
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if result.returncode == 0:
+                return {
+                    "status": "success",
+                    "message": f"Gripper command sent successfully",
+                    "command_sent": ros_command,
+                    "numeric_value": numeric_value,
+                    "width_cm": width_cm,
+                    "ros_output": result.stdout.strip() if result.stdout else None
+                }
+            else:
+                return {
+                    "status": "error", 
+                    "message": f"ROS2 command failed: {result.stderr.strip()}",
+                    "command_attempted": ros_command
+                }
+                
+        except subprocess.TimeoutExpired:
+            return {
+                "status": "error",
+                "message": "ROS2 command timed out (5 seconds)"
+            }
+        except FileNotFoundError:
+            return {
+                "status": "error", 
+                "message": "ros2 command not found. Make sure ROS2 is properly installed and sourced."
+            }
+            
+    except Exception as e:
+        import traceback
+        return {
+            "status": "error",
+            "message": f"Unexpected error in gripper control: {str(e)}",
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
 def close_connections():
     """
     Manually close WebSocket connections when needed.
