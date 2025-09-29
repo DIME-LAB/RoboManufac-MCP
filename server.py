@@ -3,14 +3,14 @@ from typing import List, Any, Optional, Union
 from pathlib import Path
 import json
 from utils.websocket_manager import WebSocketManager
-from msgs.geometry_msgs import Twist
+from msgs.geometry_msgs import Twist, PoseStamped
 from msgs.sensor_msgs import Image as RosImage, JointState
 import subprocess
 
 #camera
 import time
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 import numpy as np
 import cv2
@@ -24,8 +24,9 @@ import os
 from typing import List, Dict, Any
 import numpy as np
 from scipy.spatial.transform import Rotation as R
+import traceback
 
-LOCAL_IP = "192.168.1.164"  # Replace with your local IP address
+LOCAL_IP = "192.168.1.10"  # Replace with your local IP address
 ROSBRIDGE_IP = "localhost"  # Replace with your rosbridge server IP address
 ROSBRIDGE_PORT = 9090
 
@@ -508,11 +509,13 @@ def execute_joint_trajectory(joint_angles: List[float], duration: float = 3.0) -
             "message": f"Unexpected error in joint trajectory execution: {str(e)}"
         }
 
+
 @mcp.tool()
 def get_ee_pose(joint_angles: List[float] = None,
                 custom_lib_path: str = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries") -> Dict[str, Any]:
     """
     Get end-effector pose using forward kinematics from specified or current joint angles.
+    Perform ros2 topic echo --once /joint_states to get current joint angles.
     
     Args:
         joint_angles: Optional joint angles in radians. If None, gets current from ROS2
@@ -741,6 +744,1197 @@ def control_gripper(command: str) -> Dict[str, Any]:
         return {
             "status": "error",
             "message": f"Unexpected error in gripper control: {str(e)}",
+            "traceback": traceback.format_exc()
+        }
+
+def _get_all_mcp_tools():
+    """
+    Dynamically discover all available MCP tools in the current module.
+    Returns a dictionary of tool_name -> function mappings.
+    """
+    import sys
+    import inspect
+    
+    current_module = sys.modules[__name__]
+    available_tools = {}
+    
+    # Get all functions that could be MCP tools
+    for name, obj in inspect.getmembers(current_module, inspect.isfunction):
+        if (not name.startswith('_') and 
+            callable(obj) and 
+            obj.__module__ == current_module.__name__ and
+            # Exclude the execution tools themselves to avoid recursion
+            name not in ['execute_python_code', 'execute_code_with_server_access', 'start_background_task']):
+            available_tools[name] = obj
+    
+    return available_tools
+
+@mcp.tool()
+def execute_python_code(code: str, timeout: int = 30) -> Dict[str, Any]:
+    """
+    Execute Python code dynamically with access to all server functions and libraries.
+    Claude can write custom logic on-the-fly based on conversation context.
+    
+    Args:
+        code: Python code to execute
+        timeout: Maximum execution time in seconds
+        
+    Returns:
+        Dictionary with execution results including output, errors, and status
+    """
+    try:
+        import tempfile
+        import subprocess
+        import sys
+        import os
+        
+        # Create a temporary Python file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            # Get all available tools dynamically
+            available_tools = _get_all_mcp_tools()
+            tool_imports = ", ".join(available_tools.keys())
+            
+            # Add imports and context that Claude might need
+            code_with_context = f"""
+import sys
+import os
+import traceback
+sys.path.append('/home/aaugus11/Documents/ros-mcp-server')
+
+# Set up ROS2 environment
+os.environ['ROS_DOMAIN_ID'] = '0'
+os.environ['ROS_VERSION'] = '2'
+os.environ['ROS_DISTRO'] = 'humble'
+
+# Source ROS2 setup in subprocess calls
+def run_ros2_command(cmd_list, **kwargs):
+    \"\"\"Run ROS2 commands with proper environment sourcing\"\"\"
+    import subprocess
+    if isinstance(cmd_list, str):
+        cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && source ~/ros2/install/setup.bash && {{cmd_list}}"
+        return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
+    else:
+        cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && source ~/ros2/install/setup.bash && {{' '.join(cmd_list)}}"
+        return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
+
+# Import all the existing functions Claude can use (dynamically discovered)
+try:
+    from server import {tool_imports}
+    from msgs.geometry_msgs import Twist, PoseStamped
+    from msgs.sensor_msgs import JointState, Image as RosImage
+except ImportError:
+    # Fallback imports if running standalone
+    pass
+
+import json
+import time
+import numpy as np
+from datetime import datetime, timedelta
+import threading
+import subprocess
+import re
+
+# User's dynamic code starts here:
+{code}
+"""
+            f.write(code_with_context)
+            temp_file = f.name
+        
+        # Execute the code
+        result = subprocess.run(
+            [sys.executable, temp_file],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd='/home/aaugus11/Documents/ros-mcp-server'
+        )
+        
+        # Clean up
+        os.unlink(temp_file)
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "output": result.stdout,
+                "stderr": result.stderr if result.stderr else None,
+                "execution_time": f"Completed within {timeout}s timeout"
+            }
+        else:
+            return {
+                "status": "error",
+                "output": result.stdout if result.stdout else None,
+                "stderr": result.stderr,
+                "return_code": result.returncode
+            }
+            
+    except subprocess.TimeoutExpired:
+        # Clean up the temp file
+        try:
+            os.unlink(temp_file)
+        except:
+            pass
+        return {
+            "status": "timeout",
+            "error": f"Code execution timed out after {timeout} seconds"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def execute_code_with_server_access(code: str, timeout: int = 30) -> Dict[str, Any]:
+    """
+    Execute code with direct access to server's WebSocket manager and all tools.
+    Allows Claude to write sophisticated real-time behaviors with full server context.
+    
+    Args:
+        code: Python code to execute with server access
+        timeout: Maximum execution time in seconds
+        
+    Returns:
+        Dictionary with execution results
+    """
+    try:
+        import signal
+        
+        # Set up timeout handler
+        def timeout_handler(signum, frame):
+            raise TimeoutError(f"Code execution timed out after {timeout} seconds")
+        
+        # Get all available tools dynamically
+        available_tools = _get_all_mcp_tools()
+        
+        # ROS2 helper function for proper environment sourcing
+        def run_ros2_command(cmd_list, **kwargs):
+            """Run ROS2 commands with proper environment sourcing"""
+            import subprocess
+            if isinstance(cmd_list, str):
+                cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && {cmd_list}"
+                return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
+            else:
+                cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && {' '.join(cmd_list)}"
+                return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
+        
+        # Create execution context with access to server internals
+        exec_globals = {
+            # Server components
+            'ws_manager': ws_manager,
+            'mcp': mcp,
+            
+            # ROS2 helper
+            'run_ros2_command': run_ros2_command,
+            
+            # Standard libraries Claude might need
+            'time': time,
+            'datetime': datetime,
+            'timedelta': timedelta,
+            'np': np,
+            'json': json,
+            'threading': threading,
+            'os': os,
+            'cv2': cv2,
+            'subprocess': subprocess,
+            're': re,
+            
+            # Message classes
+            'Twist': Twist,
+            'PoseStamped': PoseStamped,
+            'JointState': JointState,
+            'RosImage': RosImage,
+            
+            # Utility functions
+            'print': print,
+            'len': len,
+            'range': range,
+            'enumerate': enumerate,
+            'zip': zip,
+        }
+        
+        # Add all discovered tools to execution context
+        exec_globals.update(available_tools)
+        
+        exec_locals = {}
+        
+        # Set timeout
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(timeout)
+        
+        try:
+            # Execute the code in this context
+            exec(code, exec_globals, exec_locals)
+            
+            # Cancel timeout
+            signal.alarm(0)
+            
+            # Capture any return values or variables created
+            result_vars = {k: str(v) for k, v in exec_locals.items() 
+                          if not k.startswith('_') and not callable(v)}
+            
+            return {
+                "status": "success",
+                "message": "Code executed successfully with server access",
+                "variables_created": result_vars if result_vars else None,
+                "available_tools": list(available_tools.keys())
+            }
+            
+        except Exception as e:
+            signal.alarm(0)
+            return {
+                "status": "error",
+                "error": str(e),
+                "traceback": traceback.format_exc()
+            }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": f"Failed to set up execution environment: {str(e)}",
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def start_background_task(code: str, task_name: str = "background_task") -> Dict[str, Any]:
+    """
+    Start a background task that runs independently of the main conversation.
+    Perfect for real-time tracking, monitoring, or continuous operations.
+    
+    Args:
+        code: Python code to run in background
+        task_name: Name identifier for the task
+        
+    Returns:
+        Dictionary with task startup status
+    """
+    try:
+        import threading
+        import time
+        
+        # Get all available tools dynamically
+        available_tools = _get_all_mcp_tools()
+        
+        # ROS2 helper function for proper environment sourcing
+        def run_ros2_command(cmd_list, **kwargs):
+            """Run ROS2 commands with proper environment sourcing"""
+            import subprocess
+            if isinstance(cmd_list, str):
+                cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && {cmd_list}"
+                return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
+            else:
+                cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && {' '.join(cmd_list)}"
+                return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
+        
+        # Create execution context similar to execute_code_with_server_access
+        exec_globals = {
+            'ws_manager': ws_manager,
+            'run_ros2_command': run_ros2_command,
+            'time': time,
+            'datetime': datetime,
+            'np': np,
+            'json': json,
+            'threading': threading,
+            'subprocess': subprocess,
+            're': re,
+            'print': print,
+            'task_name': task_name,
+            
+            # Message classes
+            'Twist': Twist,
+            'PoseStamped': PoseStamped,
+            'JointState': JointState,
+            'RosImage': RosImage,
+        }
+        
+        # Add all discovered tools to execution context
+        exec_globals.update(available_tools)
+        
+        def run_background_code():
+            try:
+                exec(code, exec_globals)
+            except Exception as e:
+                print(f"Background task '{task_name}' error: {e}")
+                traceback.print_exc()
+        
+        # Start the background thread
+        thread = threading.Thread(target=run_background_code, name=task_name, daemon=True)
+        thread.start()
+        
+        return {
+            "status": "success",
+            "message": f"Background task '{task_name}' started successfully",
+            "task_name": task_name,
+            "thread_id": thread.ident,
+            "available_tools": list(available_tools.keys())
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": f"Failed to start background task: {str(e)}",
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def start_topic_stream(topic_name: str, message_type: str = "geometry_msgs/PoseStamped"):
+    """
+    Start a continuous WebSocket stream for a ROS topic.
+    Returns a stream ID that can be used to read from the stream.
+    
+    Args:
+        topic_name: ROS topic to stream (e.g., "/object_poses/jenga_2")
+        message_type: ROS message type (e.g., "geometry_msgs/PoseStamped", "geometry_msgs/PoseArray")
+        
+    Returns:
+        Dictionary with stream status and ID
+    """
+    try:
+        # Create subscription message
+        subscribe_msg = {
+            "op": "subscribe",
+            "topic": topic_name,
+            "type": message_type
+        }
+        
+        # Send subscription via WebSocket
+        ws_manager.send(subscribe_msg)
+        
+        return {
+            "status": "success",
+            "message": f"Started streaming {topic_name}",
+            "topic": topic_name,
+            "message_type": message_type,
+            "stream_id": f"stream_{topic_name.replace('/', '_')}",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "topic": topic_name,
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def read_from_stream(topic_name: str, timeout: int = 1):
+    """
+    Read the latest message from a streaming topic.
+    Much faster than ros2 topic echo since it uses persistent WebSocket connection.
+    
+    Args:
+        topic_name: ROS topic to read from (must be already streaming)
+        timeout: Timeout in seconds
+        
+    Returns:
+        Parsed message data or error information
+    """
+    try:
+        import re
+        import math
+        
+        # Read from WebSocket stream
+        raw_data = ws_manager.receive_binary()
+        
+        if not raw_data:
+            return {
+                "status": "no_data",
+                "topic": topic_name,
+                "message": "No data received from stream"
+            }
+        
+        # Parse WebSocket message
+        if isinstance(raw_data, bytes):
+            raw_data = raw_data.decode("utf-8")
+            
+        msg_data = json.loads(raw_data)
+        
+        # Extract the ROS message
+        if "msg" in msg_data:
+            ros_msg = msg_data["msg"]
+        else:
+            ros_msg = msg_data
+            
+        parsed_result = {
+            "status": "success",
+            "topic": topic_name,
+            "timestamp": datetime.now().isoformat(),
+            "raw_message": ros_msg
+        }
+        
+        # Parse common message structures
+        
+        # Handle PoseStamped messages
+        if "pose" in ros_msg:
+            pose = ros_msg["pose"]
+            
+            # Extract position
+            if "position" in pose:
+                parsed_result["position"] = pose["position"]
+                
+            # Extract orientation and convert to RPY
+            if "orientation" in pose:
+                quat = pose["orientation"]
+                parsed_result["orientation_quaternion"] = quat
+                
+                # Convert to RPY
+                qx, qy, qz, qw = quat["x"], quat["y"], quat["z"], quat["w"]
+                
+                # Quaternion to Euler conversion
+                sinr_cosp = 2 * (qw * qx + qy * qz)
+                cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+                roll = math.atan2(sinr_cosp, cosr_cosp)
+                
+                sinp = 2 * (qw * qy - qz * qx)
+                if abs(sinp) >= 1:
+                    pitch = math.copysign(math.pi / 2, sinp)
+                else:
+                    pitch = math.asin(sinp)
+                
+                siny_cosp = 2 * (qw * qz + qx * qy)
+                cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
+                yaw = math.atan2(siny_cosp, cosy_cosp)
+                
+                parsed_result["orientation_rpy_degrees"] = {
+                    "roll": math.degrees(roll),
+                    "pitch": math.degrees(pitch),
+                    "yaw": math.degrees(yaw)
+                }
+                
+        # Handle PoseArray messages
+        elif "poses" in ros_msg:
+            poses = ros_msg["poses"]
+            parsed_result["poses"] = []
+            
+            for i, pose in enumerate(poses):
+                pose_data = {"index": i}
+                
+                if "position" in pose:
+                    pose_data["position"] = pose["position"]
+                    
+                if "orientation" in pose:
+                    quat = pose["orientation"]
+                    pose_data["orientation_quaternion"] = quat
+                    
+                    # Convert to RPY
+                    qx, qy, qz, qw = quat["x"], quat["y"], quat["z"], quat["w"]
+                    
+                    sinr_cosp = 2 * (qw * qx + qy * qz)
+                    cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+                    roll = math.atan2(sinr_cosp, cosr_cosp)
+                    
+                    sinp = 2 * (qw * qy - qz * qx)
+                    if abs(sinp) >= 1:
+                        pitch = math.copysign(math.pi / 2, sinp)
+                    else:
+                        pitch = math.asin(sinp)
+                    
+                    siny_cosp = 2 * (qw * qz + qx * qy)
+                    cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
+                    yaw = math.atan2(siny_cosp, cosy_cosp)
+                    
+                    pose_data["orientation_rpy_degrees"] = {
+                        "roll": math.degrees(roll),
+                        "pitch": math.degrees(pitch),
+                        "yaw": math.degrees(yaw)
+                    }
+                
+                parsed_result["poses"].append(pose_data)
+                
+            parsed_result["pose_count"] = len(poses)
+        
+        return parsed_result
+        
+    except json.JSONDecodeError as e:
+        return {
+            "status": "error",
+            "topic": topic_name,
+            "error": f"JSON decode error: {str(e)}",
+            "raw_data": raw_data if 'raw_data' in locals() else None
+        }
+    except Exception as e:
+        return {
+            "status": "error", 
+            "topic": topic_name,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def stop_topic_stream(topic_name: str):
+    """
+    Stop streaming a ROS topic.
+    
+    Args:
+        topic_name: ROS topic to stop streaming
+        
+    Returns:
+        Dictionary with stop status
+    """
+    try:
+        # Send unsubscribe message
+        unsubscribe_msg = {
+            "op": "unsubscribe",
+            "topic": topic_name
+        }
+        
+        ws_manager.send(unsubscribe_msg)
+        
+        return {
+            "status": "success",
+            "message": f"Stopped streaming {topic_name}",
+            "topic": topic_name,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "topic": topic_name,
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def fast_topic_read(topic_name: str, timeout: int = 2):
+    """
+    Fast ROS2 topic reading with proper environment sourcing.
+    Optimized for Claude's dynamic code execution to avoid environment issues.
+    
+    Args:
+        topic_name: ROS topic to read from
+        timeout: Timeout in seconds
+        
+    Returns:
+        Parsed topic data or error information
+    """
+    try:
+        import subprocess
+        import re
+        
+        # Use properly sourced environment
+        cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && source ~/ros2/install/setup.bash && timeout {timeout} ros2 topic echo {topic_name} --once"
+        
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=timeout + 2
+        )
+        
+        if result.returncode == 0:
+            # Parse common message types automatically
+            message_data = result.stdout.strip()
+            
+            # Try to parse position data
+            x_match = re.search(r'position:\s*\n\s*x: ([\d\.-]+)', message_data)
+            y_match = re.search(r'y: ([\d\.-]+)', message_data)
+            z_match = re.search(r'z: ([\d\.-]+)', message_data)
+            
+            # Try to parse orientation data (quaternion)
+            orientation_match = re.search(
+                r'orientation:\s*\n\s*x: ([\d\.-]+)\s*\n\s*y: ([\d\.-]+)\s*\n\s*z: ([\d\.-]+)\s*\n\s*w: ([\d\.-]+)', 
+                message_data
+            )
+            
+            parsed_data = {
+                "status": "success",
+                "topic": topic_name,
+                "raw_message": message_data,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Add parsed position if found
+            if all([x_match, y_match, z_match]):
+                parsed_data["position"] = {
+                    "x": float(x_match.group(1)),
+                    "y": float(y_match.group(1)),
+                    "z": float(z_match.group(1))
+                }
+            
+            # Add parsed orientation if found
+            if orientation_match:
+                parsed_data["orientation_quaternion"] = {
+                    "x": float(orientation_match.group(1)),
+                    "y": float(orientation_match.group(2)),
+                    "z": float(orientation_match.group(3)),
+                    "w": float(orientation_match.group(4))
+                }
+                
+                # Convert to RPY for convenience
+                import math
+                qx, qy, qz, qw = [float(orientation_match.group(i)) for i in range(1, 5)]
+                
+                # Convert quaternion to Euler angles
+                sinr_cosp = 2 * (qw * qx + qy * qz)
+                cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+                roll = math.atan2(sinr_cosp, cosr_cosp)
+                
+                sinp = 2 * (qw * qy - qz * qx)
+                if abs(sinp) >= 1:
+                    pitch = math.copysign(math.pi / 2, sinp)
+                else:
+                    pitch = math.asin(sinp)
+                
+                siny_cosp = 2 * (qw * qz + qx * qy)
+                cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
+                yaw = math.atan2(siny_cosp, cosy_cosp)
+                
+                parsed_data["orientation_rpy_degrees"] = {
+                    "roll": math.degrees(roll),
+                    "pitch": math.degrees(pitch),
+                    "yaw": math.degrees(yaw)
+                }
+            
+            return parsed_data
+            
+        else:
+            return {
+                "status": "error",
+                "topic": topic_name,
+                "error": f"Failed to read topic: {result.stderr}",
+                "return_code": result.returncode
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "timeout",
+            "topic": topic_name,
+            "error": f"Topic read timed out after {timeout} seconds"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "topic": topic_name,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def pub_pose_stamped(position: List[float], orientation: List[float], topic: str = "/target_pose", frame_id: str = "base_link"):
+    """
+    Publish a PoseStamped message to a ROS topic.
+    
+    Args:
+        position: [x, y, z] position in meters
+        orientation: [x, y, z, w] quaternion OR [roll, pitch, yaw] in degrees  
+        topic: ROS topic to publish to
+        frame_id: Reference frame (default: "base_link")
+        
+    Returns:
+        Dictionary with publish status
+    """
+    try:
+        pose_stamped = PoseStamped(ws_manager, topic=topic)
+        msg = pose_stamped.publish(position, orientation, frame_id)
+        
+        return {
+            "status": "success",
+            "message": f"PoseStamped published to {topic}",
+            "topic": topic,
+            "position": position,
+            "orientation": orientation,
+            "frame_id": frame_id
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "topic": topic,
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def sub_pose_stamped(topic: str = "/object_pose"):
+    """
+    Subscribe to a PoseStamped topic and get parsed pose data.
+    
+    Args:
+        topic: ROS topic to subscribe to
+        
+    Returns:
+        Dictionary with parsed pose data including position, quaternion, and RPY
+    """
+    try:
+        pose_stamped = PoseStamped(ws_manager, topic=topic)
+        msg = pose_stamped.subscribe()
+        
+        if msg is not None:
+            return {
+                "status": "success",
+                "data": msg
+            }
+        else:
+            return {
+                "status": "no_data",
+                "message": f"No PoseStamped data received from {topic}"
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "topic": topic,
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def create_topic_listener(topic_name: str, message_type: str = "geometry_msgs/PoseStamped", 
+                         callback_code: str = "", frequency_hz: float = 10.0):
+    """
+    Create a continuous topic listener that executes custom code for each message.
+    Perfect for real-time tracking and reactive behaviors.
+    
+    Args:
+        topic_name: ROS topic to listen to (e.g., "/object_poses/jenga_2")
+        message_type: Type of ROS message ("geometry_msgs/PoseStamped", "geometry_msgs/PoseArray", etc.)
+        callback_code: Python code to execute for each received message (has access to 'msg_data')
+        frequency_hz: Listening frequency in Hz
+        
+    Returns:
+        Dictionary with listener status and control info
+    """
+    try:
+        import threading
+        import time
+        
+        # Create the appropriate message class
+        if message_type == "geometry_msgs/PoseStamped":
+            subscriber = PoseStamped(ws_manager, topic=topic_name)
+        elif message_type == "geometry_msgs/PoseArray":
+            # Could add PoseArray class here
+            return {"status": "error", "error": "PoseArray not yet implemented"}
+        else:
+            return {"status": "error", "error": f"Unsupported message type: {message_type}"}
+        
+        listener_active = True
+        
+        def listener_thread():
+            """Background thread that continuously listens to the topic"""
+            nonlocal listener_active
+            
+            # Get all available tools for the callback code
+            available_tools = _get_all_mcp_tools()
+            
+            # Create execution context for callback code
+            exec_globals = {
+                'ws_manager': ws_manager,
+                'time': time,
+                'datetime': datetime,
+                'np': np,
+                'json': json,
+                'print': print,
+                'subscriber': subscriber,
+                # Add all available tools
+                **available_tools
+            }
+            
+            while listener_active:
+                try:
+                    # Get message from topic
+                    msg_data = subscriber.subscribe()
+                    
+                    if msg_data:
+                        # Make message data available to callback code
+                        exec_globals['msg_data'] = msg_data
+                        
+                        # Execute user's callback code
+                        if callback_code.strip():
+                            try:
+                                exec(callback_code, exec_globals)
+                            except Exception as e:
+                                print(f"[TopicListener] Callback error: {e}")
+                        else:
+                            # Default behavior - just print the data
+                            if "position" in msg_data:
+                                pos = msg_data["position"]
+                                print(f"[{topic_name}] Position: ({pos['x']:.3f}, {pos['y']:.3f}, {pos['z']:.3f})")
+                            
+                            if "orientation_rpy_degrees" in msg_data:
+                                rpy = msg_data["orientation_rpy_degrees"]
+                                print(f"[{topic_name}] RPY: ({rpy['roll']:.1f}°, {rpy['pitch']:.1f}°, {rpy['yaw']:.1f}°)")
+                    
+                    # Control frequency
+                    time.sleep(1.0 / frequency_hz)
+                    
+                except Exception as e:
+                    print(f"[TopicListener] Error: {e}")
+                    time.sleep(0.1)
+        
+        # Start the listener thread
+        thread = threading.Thread(target=listener_thread, name=f"listener_{topic_name.replace('/', '_')}", daemon=True)
+        thread.start()
+        
+        return {
+            "status": "success",
+            "message": f"Topic listener started for {topic_name}",
+            "topic": topic_name,
+            "message_type": message_type,
+            "frequency_hz": frequency_hz,
+            "thread_id": thread.ident,
+            "listener_id": f"listener_{topic_name.replace('/', '_')}"
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def test_ros2_environment():
+    """
+    Test if ROS2 environment is properly set up in dynamic code execution.
+    This will verify that ros2 commands work in the execution context.
+    """
+    try:
+        # Test using execute_code_with_server_access
+        test_code = '''
+# Test ROS2 environment
+result = run_ros2_command("ros2 topic list", capture_output=True, text=True, timeout=5)
+
+if result.returncode == 0:
+    topics = result.stdout.strip().split('\\n')
+    print(f"✅ ROS2 environment working! Found {len(topics)} topics:")
+    for topic in topics[:5]:  # Show first 5 topics
+        print(f"  - {topic}")
+    if len(topics) > 5:
+        print(f"  ... and {len(topics) - 5} more")
+else:
+    print(f"❌ ROS2 environment issue: {result.stderr}")
+    
+# Test publishing a simple message
+pub_result = run_ros2_command(
+    "ros2 topic pub /test_topic std_msgs/String \\"data: 'Environment test from MCP server'\\" --once",
+    capture_output=True, text=True, timeout=10
+)
+
+if pub_result.returncode == 0:
+    print("✅ Successfully published test message to /test_topic")
+else:
+    print(f"❌ Failed to publish: {pub_result.stderr}")
+'''
+        
+        # Get all available tools dynamically
+        available_tools = _get_all_mcp_tools()
+        
+        # ROS2 helper function
+        def run_ros2_command(cmd_list, **kwargs):
+            import subprocess
+            if isinstance(cmd_list, str):
+                cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && {cmd_list}"
+                return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
+            else:
+                cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && {' '.join(cmd_list)}"
+                return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
+        
+        # Create execution context
+        exec_globals = {
+            'ws_manager': ws_manager,
+            'run_ros2_command': run_ros2_command,
+            'time': time,
+            'datetime': datetime,
+            'timedelta': timedelta,
+            'print': print,
+            **available_tools
+        }
+        
+        # Execute the test code
+        exec(test_code, exec_globals)
+        
+        return {
+            "status": "success",
+            "message": "ROS2 environment test completed - check output above"
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def run_primitive_script(script_name: str, timeout: int = 30):
+    """
+    Run a primitive script from the ur_asu package with proper ROS2 environment.
+    
+    Args:
+        script_name: Name of the script (e.g., "movea2b.py", "move_home.py", "pick_place.py")
+        timeout: Maximum execution time in seconds
+        
+    Returns:
+        Dictionary with execution results
+    """
+    try:
+        import subprocess
+        import os
+        
+        # Path to primitive scripts
+        primitives_dir = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/scripts/primitives"
+        script_path = os.path.join(primitives_dir, script_name)
+        
+        # Check if script exists
+        if not os.path.exists(script_path):
+            return {
+                "status": "error",
+                "error": f"Script not found: {script_path}",
+                "available_scripts": [f for f in os.listdir(primitives_dir) if f.endswith('.py')] if os.path.exists(primitives_dir) else []
+            }
+        
+        # Source ROS2 environment and run script
+        cmd = f"""
+source /opt/ros/humble/setup.bash
+source ~/Desktop/ros2_ws/install/setup.bash
+source ~/ros2/install/setup.bash
+export ROS_DOMAIN_ID=0
+cd {primitives_dir}
+/usr/bin/python3 {script_name}
+"""
+        
+        # Run with bash shell to source environment
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": f"Primitive script '{script_name}' executed successfully",
+                "script_path": script_path,
+                "output": result.stdout,
+                "stderr": result.stderr if result.stderr else None
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Script execution failed with return code {result.returncode}",
+                "script_path": script_path,
+                "output": result.stdout if result.stdout else None,
+                "stderr": result.stderr,
+                "return_code": result.returncode
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "timeout",
+            "message": f"Script execution timed out after {timeout} seconds",
+            "script_name": script_name
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "script_name": script_name,
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def list_primitive_scripts():
+    """
+    List all available primitive scripts in the ur_asu package.
+    
+    Returns:
+        Dictionary with list of available scripts
+    """
+    try:
+        import os
+        
+        primitives_dir = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/scripts/primitives"
+        
+        if not os.path.exists(primitives_dir):
+            return {
+                "status": "error",
+                "error": f"Primitives directory not found: {primitives_dir}"
+            }
+        
+        scripts = [f for f in os.listdir(primitives_dir) if f.endswith('.py')]
+        
+        return {
+            "status": "success",
+            "primitives_directory": primitives_dir,
+            "available_scripts": scripts,
+            "script_count": len(scripts)
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def move_down():
+    """
+    Execute the move_down.py primitive script.
+    This tool moves the robot down in Z-axis with real-time force monitoring and immediate trajectory cancellation.
+    
+    Returns:
+        Dictionary with execution status and results
+    """
+    try:
+        import subprocess
+        import os
+        
+        # Path to the move_down.py script
+        script_path = "/home/aaugus11/Documents/ros-mcp-server/primitives/move_down.py"
+        
+        # Check if script exists
+        if not os.path.exists(script_path):
+            return {
+                "status": "error",
+                "error": f"Move down script not found: {script_path}"
+            }
+        
+        # Source ROS2 environment and run script
+        cmd = f"""
+source /opt/ros/humble/setup.bash
+source ~/Desktop/ros2_ws/install/setup.bash
+source ~/ros2/install/setup.bash
+export ROS_DOMAIN_ID=0
+cd /home/aaugus11/Documents/ros-mcp-server/primitives
+/usr/bin/python3 move_down.py
+"""
+        
+        # Run with bash shell to source environment
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=30  # Reduced timeout to 30 seconds for faster feedback
+        )
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "Move down operation completed successfully",
+                "script_path": script_path,
+                "output": result.stdout,
+                "stderr": result.stderr if result.stderr else None
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Move down operation failed with return code {result.returncode}",
+                "script_path": script_path,
+                "output": result.stdout if result.stdout else None,
+                "stderr": result.stderr,
+                "return_code": result.returncode
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "timeout",
+            "message": "Move down operation timed out after 30 seconds. The script may be waiting for ROS2 services or hanging.",
+            "script_name": "move_down.py",
+            "debug_info": "Check if ROS2 services are running: ros2 topic list, ros2 service list"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "script_name": "move_down.py",
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def visual_servo_pick(topic_name: str = "/object_poses/jenga_4", hover_height: float = 0.15, duration: int = 30):
+    """
+    Execute visual servo pick alignment for Jenga blocks.
+    This tool uses visual servoing to align the robot end-effector above a Jenga block for picking.
+    
+    Args:
+        topic_name: ROS topic for Jenga pose (e.g., "/object_poses/jenga_4")
+        hover_height: Height above the block to hover (meters, default: 0.15)
+        duration: How long to run the visual servo in seconds (default: 30)
+    
+    Returns:
+        Dictionary with execution status and results
+    """
+    try:
+        import subprocess
+        import os
+        import time
+        
+        # Path to the visual_servo.py script
+        script_path = "/home/aaugus11/Documents/ros-mcp-server/primitives/visual_servo.py"
+        
+        # Check if script exists
+        if not os.path.exists(script_path):
+            return {
+                "status": "error",
+                "error": f"Visual servo script not found: {script_path}"
+            }
+        
+        # Source ROS2 environment and run script with timeout
+        cmd = f"""
+source /opt/ros/humble/setup.bash
+source ~/Desktop/ros2_ws/install/setup.bash
+export ROS_DOMAIN_ID=0
+cd /home/aaugus11/Documents/ros-mcp-server/primitives
+timeout {duration + 5} /usr/bin/python3 visual_servo.py --topic {topic_name} --height {hover_height} --duration {duration}
+"""
+        
+        # Run with bash shell to source environment
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=duration + 10  # Add buffer for startup/shutdown
+        )
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": f"Visual servo pick completed successfully for {duration} seconds",
+                "topic_name": topic_name,
+                "hover_height": hover_height,
+                "duration": duration,
+                "output": result.stdout,
+                "stderr": result.stderr if result.stderr else None
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Visual servo pick failed with return code {result.returncode}",
+                "topic_name": topic_name,
+                "hover_height": hover_height,
+                "duration": duration,
+                "output": result.stdout if result.stdout else None,
+                "stderr": result.stderr,
+                "return_code": result.returncode
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "timeout",
+            "message": f"Visual servo pick timed out after {duration + 10} seconds",
+            "topic_name": topic_name,
+            "hover_height": hover_height,
+            "duration": duration
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "topic_name": topic_name,
+            "hover_height": hover_height,
+            "duration": duration,
             "traceback": traceback.format_exc()
         }
 
