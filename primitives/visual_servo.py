@@ -19,11 +19,12 @@ import argparse
 from action_libraries import hover_over
 
 class VisualServo(Node):
-    def __init__(self, topic_name="/object_poses/jenga_3", hover_height=0.15):
+    def __init__(self, topic_name="/object_poses/jenga_3", hover_height=0.15, movement_duration=7.0):
         super().__init__('visual_servo')
         
         self.topic_name = topic_name
         self.hover_height = hover_height
+        self.movement_duration = movement_duration  # Duration for IK movement
         self.last_target_pose = None
         self.position_threshold = 0.005  # 5mm
         self.angle_threshold = 2.0       # 2 degrees
@@ -52,6 +53,7 @@ class VisualServo(Node):
         
         self.get_logger().info(f"🤖 Visual servo started for {topic_name}")
         self.get_logger().info(f"📏 Hover height: {hover_height}m")
+        self.get_logger().info(f"⏱️ Movement duration: {movement_duration}s")
         
     def quaternion_to_rpy(self, x, y, z, w):
         """Convert quaternion to roll, pitch, yaw in degrees"""
@@ -123,9 +125,9 @@ class VisualServo(Node):
             # Reset stable count when movement is needed
             self.stable_count = 0
             
-            # Use hover_over function
+            # Use hover_over function with custom duration
             target_pose = (position, rpy)
-            trajectory = hover_over(target_pose, self.hover_height)
+            trajectory = hover_over(target_pose, self.hover_height, self.movement_duration)
             
             # Execute trajectory
             self.execute_trajectory(trajectory)
@@ -179,12 +181,14 @@ class VisualServo(Node):
 def main(args=None):
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Visual Servo Node')
-    parser.add_argument('--topic', type=str, default="/object_poses/jenga_3", 
+    parser.add_argument('--topic', type=str, default="/object_poses/jenga_1", 
                        help='Topic name for pose subscription')
     parser.add_argument('--height', type=float, default=0.15,
                        help='Hover height in meters')
     parser.add_argument('--duration', type=int, default=30,
                        help='Maximum duration in seconds')
+    parser.add_argument('--movement-duration', type=float, default=7.0,
+                       help='Duration for each IK movement in seconds (default: 7.0)')
     
     # Parse arguments from sys.argv if args is None
     if args is None:
@@ -193,7 +197,7 @@ def main(args=None):
         args = parser.parse_args(args)
     
     rclpy.init(args=None)
-    node = VisualServo(topic_name=args.topic, hover_height=args.height)
+    node = VisualServo(topic_name=args.topic, hover_height=args.height, movement_duration=args.movement_duration)
     
     import time
     start_time = time.time()

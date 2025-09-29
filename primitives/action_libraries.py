@@ -2,6 +2,7 @@ from builtin_interfaces.msg import Duration
 from ur_asu.custom_libraries.ik_solver import compute_ik
 
 HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0]  # XYZRPY
+PICK_STATION_POSE = [-0.180, -0.385, 0.350, 0, 180, 0]  # XYZRPY - Pick station position
 
 def make_point(joint_positions, seconds):
     return {
@@ -12,6 +13,12 @@ def make_point(joint_positions, seconds):
 
 def home():
     joint_angles = compute_ik(HOME_POSE[0:3], HOME_POSE[3:6])
+    if joint_angles is not None:
+        return [make_point(joint_angles, 4)]
+    return []
+
+def pick():
+    joint_angles = compute_ik(PICK_STATION_POSE[0:3], PICK_STATION_POSE[3:6])
     if joint_angles is not None:
         return [make_point(joint_angles, 4)]
     return []
@@ -86,9 +93,10 @@ def spin_around(target_pose, height):
         "traj7": move(target_position, [0, 180, yaws[7]], segment_duration),
     }
 
-def hover_over(target_pose, height):
+def hover_over(target_pose, height, duration=3.0):
     """
     target_pose is (position, rpy), where position = [x, y, z] and only x, y are considered
+    duration: time in seconds for the movement
     """
     target_position = target_pose[0].copy() # copying positions
     target_position[2] = height  # Set height to given value
@@ -97,10 +105,10 @@ def hover_over(target_pose, height):
     yaw = target_pose[1][2] + 90  # Add 90 degrees rotation to target yaw
     # null_rot = [0, 180, 0]
     target_rot = [fixed_roll, fixed_pitch, yaw]
-    segment_duration = 3 # specify segment_duration
+    segment_duration = duration # use provided duration
     # print(block_hover, target_rot)
     (x, y, z) = target_position
-    print(f"Made target pose of <{x:.3f}, {y:.3f}, {z:.3f}> @ rpy [{fixed_roll:.1f}, {fixed_pitch:.1f}, {yaw:.1f}]")
+    print(f"Made target pose of <{x:.3f}, {y:.3f}, {z:.3f}> @ rpy [{fixed_roll:.1f}, {fixed_pitch:.1f}, {yaw:.1f}] (duration: {duration}s)")
 
     return {
         # "traj0": move(target_position,null_rot,segment_duration), # hovers over target 

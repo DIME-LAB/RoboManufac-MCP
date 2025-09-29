@@ -26,7 +26,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 import traceback
 
-LOCAL_IP = "192.168.1.10"  # Replace with your local IP address
+LOCAL_IP = "192.168.56.1"  # Replace with your local IP address
 ROSBRIDGE_IP = "localhost"  # Replace with your rosbridge server IP address
 ROSBRIDGE_PORT = 9090
 
