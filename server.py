@@ -309,7 +309,7 @@ def read_topic(topic_name: str, timeout: int = 5):
     
     try:
         # Source ROS2 and run the command in bash
-        cmd = f"source /opt/ros/humble/setup.bash && timeout {timeout} ros2 topic echo {topic_name} --once"
+        cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && timeout {timeout} ros2 topic echo {topic_name} --once"
         
         process_result = subprocess.run(
             cmd,

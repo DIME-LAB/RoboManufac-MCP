@@ -15,6 +15,7 @@ from std_msgs.msg import Float64MultiArray
 import numpy as np
 import time
 import sys
+import yaml
 
 # Add path to your ur_asu package
 main_path = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main"
@@ -28,7 +29,8 @@ from ur_asu.custom_libraries.ik_solver import compute_ik
 # CONFIGURABLE PARAMETERS - CHANGE THESE AS NEEDED
 # =============================================================================
 FORCE_Z_THRESHOLD = -5.0  # Force threshold in Z direction (Newtons, negative = downward force)
-MOVE_STEP_SIZE = 0.05     # Distance to move down each step (meters)
+FINAL_Z_POSITION = 0.148  # Final Z position in meters
+MOVEMENT_DURATION = 5.0   # Duration for smooth movement in seconds
 FORCE_CHECK_INTERVAL = 0.02  # Check force every 20ms during movement - more responsive
 # =============================================================================
 
@@ -98,6 +100,10 @@ class MoveDown(Node):
         self.retry_count = 0
         self.max_retries = 3  # Maximum retries per position
         
+        # Pose timeout management
+        self.pose_timeout_count = 0
+        self.max_pose_timeout = 50  # 5 seconds timeout (50 * 0.1s)
+        
         # Wait for action server
         self.get_logger().info("Waiting for action server...")
         self.action_client.wait_for_server()
@@ -122,13 +128,81 @@ class MoveDown(Node):
         self.pose_received = True
     
     def check_pose_and_start(self):
-        """Check if pose is received and start movement"""
+        """Check if pose is received and start movement with timeout"""
+        self.pose_timeout_count += 1
+        
         if self.pose_received:
             # Cancel this timer
             if hasattr(self, '_pose_check_timer'):
                 self._pose_check_timer.cancel()
             # Start the movement
             self.start_move_down()
+        elif self.pose_timeout_count >= self.max_pose_timeout:
+            # Timeout reached, try fallback method
+            self.get_logger().warn("Pose timeout reached. Trying fallback method...")
+            if hasattr(self, '_pose_check_timer'):
+                self._pose_check_timer.cancel()
+            self.get_pose_fallback()
+        else:
+            # Still waiting, log progress
+            if self.pose_timeout_count % 10 == 0:  # Log every second
+                self.get_logger().info(f"Still waiting for pose... ({self.pose_timeout_count * 0.1:.1f}s)")
+    
+    def get_pose_fallback(self):
+        """Fallback method to get current pose using ROS2 command line"""
+        try:
+            import subprocess
+            
+            self.get_logger().info("Attempting to get pose using ROS2 command line...")
+            
+            # Use ros2 topic echo to get pose data
+            result = subprocess.run([
+                'bash', '-c', 
+                'source /opt/ros/humble/setup.bash && ros2 topic echo /tcp_pose_broadcaster/pose --once'
+            ], capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                self.get_logger().error(f"Failed to get pose via command line: {result.stderr}")
+                rclpy.shutdown()
+                return
+            
+            # Parse the YAML output
+            data = yaml.safe_load(result.stdout)
+            
+            if 'pose' not in data:
+                self.get_logger().error("No pose data found in command output")
+                rclpy.shutdown()
+                return
+            
+            pose_data = data['pose']
+            
+            # Create a mock pose object
+            class MockPose:
+                def __init__(self, pos_data, ori_data):
+                    self.position = type('obj', (object,), {
+                        'x': pos_data['x'],
+                        'y': pos_data['y'], 
+                        'z': pos_data['z']
+                    })()
+                    self.orientation = type('obj', (object,), {
+                        'x': ori_data['x'],
+                        'y': ori_data['y'],
+                        'z': ori_data['z'],
+                        'w': ori_data['w']
+                    })()
+            
+            self.current_ee_pose = MockPose(pose_data['position'], pose_data['orientation'])
+            self.pose_received = True
+            
+            self.get_logger().info(f"Successfully got pose via fallback method:")
+            self.get_logger().info(f"Position: x={self.current_ee_pose.position.x:.3f}, y={self.current_ee_pose.position.y:.3f}, z={self.current_ee_pose.position.z:.3f}")
+            
+            # Start the movement
+            self.start_move_down()
+            
+        except Exception as e:
+            self.get_logger().error(f"Failed to get pose via fallback method: {e}")
+            rclpy.shutdown()
     
     def emergency_stop(self):
         """Emergency stop - cancel current trajectory and stop immediately"""
@@ -181,13 +255,14 @@ class MoveDown(Node):
         
         self.get_logger().info("Starting move down sequence...")
         self.get_logger().info(f"Target force threshold: {FORCE_Z_THRESHOLD}N in Z direction")
-        self.get_logger().info(f"Step size: {MOVE_STEP_SIZE}m")
+        self.get_logger().info(f"Final Z position: {FINAL_Z_POSITION}m")
+        self.get_logger().info(f"Movement duration: {MOVEMENT_DURATION}s")
         self.get_logger().info(f"Force check interval: {FORCE_CHECK_INTERVAL}s")
         
         # Wait for current pose to be received
         if not self.pose_received:
             self.get_logger().info("Waiting for current end-effector pose...")
-            # Create a timer to check for pose and start movement
+            # Create a timer to check for pose and start movement (with timeout)
             self._pose_check_timer = self.create_timer(0.1, self.check_pose_and_start)
             return
         
@@ -200,29 +275,20 @@ class MoveDown(Node):
         self.start_position = self.current_position.copy()
         
         self.get_logger().info(f"Starting from actual position: {self.current_position}")
+        self.get_logger().info(f"Target final position: Z = {FINAL_Z_POSITION}m")
         
-        # Start the downward movement
-        self.continue_move_down()
+        # Calculate target position (keep X and Y, set Z to final position)
+        target_position = [
+            self.current_position[0],
+            self.current_position[1], 
+            FINAL_Z_POSITION
+        ]
+        
+        self.get_logger().info(f"Moving directly to target position: {target_position}")
+        
+        # Move directly to target position with force monitoring
+        self.move_to_position_with_force_monitoring(target_position)
     
-    def continue_move_down(self):
-        """Continue moving down in steps with real-time force monitoring"""
-        if self.force_detected:
-            self.get_logger().info("Force threshold reached. Movement complete.")
-            rclpy.shutdown()
-            return
-        
-        # Reset retry count for new position
-        self.retry_count = 0
-        
-        # Calculate new position (move down in Z)
-        new_position = self.current_position.copy()
-        new_position[2] -= MOVE_STEP_SIZE
-        
-        self.get_logger().info(f"Moving to position: {new_position} (Z: {new_position[2]:.3f}m)")
-        self.get_logger().info(f"Current Z force: {self.current_force_z:.2f}N")
-        
-        # Move to new position with real-time force monitoring
-        self.move_to_position_with_force_monitoring(new_position)
     
     def move_to_position_with_force_monitoring(self, position):
         """Move to position with real-time force monitoring and cancellation"""
@@ -243,7 +309,7 @@ class MoveDown(Node):
         
         # Create trajectory
         self.get_logger().info(f"Creating trajectory for position: {position}")
-        trajectory_points = move(position, rpy, 1)  # 1 second duration - faster execution
+        trajectory_points = move(position, rpy, MOVEMENT_DURATION)  # Use configurable duration for smooth movement
         
         if not trajectory_points:
             self.get_logger().error(f"Failed to generate trajectory for position {position}")
@@ -340,41 +406,29 @@ class MoveDown(Node):
                 self.current_position = target_position
                 self.total_movement = self.start_position[2] - self.current_position[2]
                 
-                # Continue with next position if force not detected
-                if not self.force_detected:
-                    time.sleep(0.1)  # Brief pause
-                    self.continue_move_down()
+                self.get_logger().info(f"Movement completed. Final position: {self.current_position}")
+                self.get_logger().info(f"Total Z movement: {self.total_movement:.3f}m")
+                
+                if self.force_detected:
+                    self.get_logger().info("Force threshold reached during movement.")
                 else:
-                    self.get_logger().info("Force threshold reached. Movement complete.")
-                    rclpy.shutdown()
+                    self.get_logger().info("Movement completed without force threshold being reached.")
+                
+                rclpy.shutdown()
             elif result.status == 5:  # PREEMPTED (cancelled)
                 self.get_logger().info("Trajectory was preempted (likely due to force threshold)")
                 if self.force_detected:
                     self.get_logger().info("Force threshold reached. Movement complete.")
-                    rclpy.shutdown()
                 else:
-                    # Continue with next position if not force-related cancellation
-                    self.continue_move_down()
+                    self.get_logger().info("Trajectory was cancelled for unknown reason.")
+                rclpy.shutdown()
             elif result.status == 4:  # ABORTED
                 self.get_logger().warn("Trajectory was aborted by controller")
                 if self.force_detected:
                     self.get_logger().info("Force threshold reached. Movement complete.")
-                    rclpy.shutdown()
                 else:
-                    # Update current position even if trajectory failed to prevent infinite loop
-                    self.current_position = target_position
-                    self.total_movement = self.start_position[2] - self.current_position[2]
-                    self.get_logger().info(f"Updated position to: {self.current_position} (Z: {self.current_position[2]:.3f}m)")
-                    
-                    # Check retry count
-                    self.retry_count += 1
-                    if self.retry_count >= self.max_retries:
-                        self.get_logger().error(f"Max retries ({self.max_retries}) reached for position {target_position}. Moving to next position.")
-                        self.continue_move_down()
-                    else:
-                        self.get_logger().info(f"Retry {self.retry_count}/{self.max_retries} for position {target_position}")
-                        # Try the same position again
-                        self.move_to_position_with_force_monitoring(target_position)
+                    self.get_logger().error("Trajectory was aborted without force threshold being reached.")
+                rclpy.shutdown()
             else:
                 self.get_logger().error(f"Trajectory failed with status: {result.status}")
                 rclpy.shutdown()

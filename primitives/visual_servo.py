@@ -14,9 +14,102 @@ from builtin_interfaces.msg import Duration
 import math
 import sys
 import argparse
+import numpy as np
 
 # Import from local action_libraries file
 from action_libraries import hover_over
+
+class PoseKalmanFilter:
+    """Kalman filter for pose estimation and smoothing"""
+    
+    def __init__(self, process_noise=0.01, measurement_noise=0.1):
+        # State vector: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw]
+        self.state_dim = 12
+        self.measurement_dim = 6  # [x, y, z, roll, pitch, yaw]
+        
+        # State vector
+        self.x = np.zeros(self.state_dim)
+        self.P = np.eye(self.state_dim) * 10  # Initial covariance
+        
+        # Process noise
+        self.Q = np.eye(self.state_dim) * process_noise
+        
+        # Measurement noise
+        self.R = np.eye(self.measurement_dim) * measurement_noise
+        
+        # Measurement matrix (we only measure position and orientation)
+        self.H = np.zeros((self.measurement_dim, self.state_dim))
+        self.H[:6, :6] = np.eye(6)
+        
+        # State transition matrix (constant velocity model)
+        self.F = np.eye(self.state_dim)
+        dt = 1.0  # Time step (will be updated dynamically)
+        self.F[:6, 6:] = np.eye(6) * dt
+        
+        self.initialized = False
+        
+    def quaternion_to_rpy(self, x, y, z, w):
+        """Convert quaternion to roll, pitch, yaw in degrees"""
+        # Roll
+        sinr_cosp = 2 * (w * x + y * z)
+        cosr_cosp = 1 - 2 * (x * x + y * y)
+        roll = math.degrees(math.atan2(sinr_cosp, cosr_cosp))
+        
+        # Pitch
+        sinp = 2 * (w * y - z * x)
+        if abs(sinp) >= 1:
+            pitch = math.degrees(math.copysign(math.pi / 2, sinp))
+        else:
+            pitch = math.degrees(math.asin(sinp))
+        
+        # Yaw
+        siny_cosp = 2 * (w * z + x * y)
+        cosy_cosp = 1 - 2 * (y * y + z * z)
+        yaw = math.degrees(math.atan2(siny_cosp, cosy_cosp))
+        
+        return [roll, pitch, yaw]
+    
+    def update(self, pose_msg, dt=1.0):
+        """Update Kalman filter with new pose measurement"""
+        # Extract measurement
+        position = [pose_msg.pose.position.x, pose_msg.pose.position.y, pose_msg.pose.position.z]
+        rpy = self.quaternion_to_rpy(
+            pose_msg.pose.orientation.x,
+            pose_msg.pose.orientation.y,
+            pose_msg.pose.orientation.z,
+            pose_msg.pose.orientation.w
+        )
+        
+        measurement = np.array(position + rpy)
+        
+        # Update state transition matrix with current dt
+        self.F[:6, 6:] = np.eye(6) * dt
+        
+        if not self.initialized:
+            # Initialize state
+            self.x[:6] = measurement
+            self.initialized = True
+            return self.x[:6], self.x[6:12]  # Return position and velocity
+        
+        # Predict step
+        self.x = self.F @ self.x
+        self.P = self.F @ self.P @ self.F.T + self.Q
+        
+        # Update step
+        y = measurement - self.H @ self.x  # Innovation
+        S = self.H @ self.P @ self.H.T + self.R  # Innovation covariance
+        K = self.P @ self.H.T @ np.linalg.inv(S)  # Kalman gain
+        
+        self.x = self.x + K @ y
+        self.P = (np.eye(self.state_dim) - K @ self.H) @ self.P
+        
+        return self.x[:6], self.x[6:12]  # Return filtered position and velocity
+    
+    def get_filtered_pose(self):
+        """Get current filtered pose"""
+        if not self.initialized:
+            return None, None
+        return self.x[:6], self.x[6:12]
 
 class VisualServo(Node):
     def __init__(self, topic_name="/object_poses/jenga_3", hover_height=0.15, movement_duration=7.0):
@@ -28,6 +121,10 @@ class VisualServo(Node):
         self.last_target_pose = None
         self.position_threshold = 0.005  # 5mm
         self.angle_threshold = 2.0       # 2 degrees
+        
+        # Initialize Kalman filter
+        self.kalman_filter = PoseKalmanFilter(process_noise=0.005, measurement_noise=0.05)
+        self.last_update_time = None
         
         # Subscribe to pose topic
         self.pose_sub = self.create_subscription(
@@ -104,18 +201,27 @@ class VisualServo(Node):
         self.latest_pose = msg
     
     def timer_callback(self):
-        """Process pose at controlled frequency"""
+        """Process pose at controlled frequency with Kalman filtering"""
         if self.latest_pose is None:
             return
+        
+        # Calculate time delta for Kalman filter
+        current_time = self.get_clock().now().nanoseconds / 1e9
+        if self.last_update_time is not None:
+            dt = current_time - self.last_update_time
+        else:
+            dt = 1.0  # Default time step
+        self.last_update_time = current_time
+        
+        # Update Kalman filter with new measurement
+        filtered_pose, velocity = self.kalman_filter.update(self.latest_pose, dt)
+        
+        if filtered_pose is None:
+            return
             
-        # Extract position and convert quaternion to RPY
-        position = [self.latest_pose.pose.position.x, self.latest_pose.pose.position.y, self.latest_pose.pose.position.z]
-        rpy = self.quaternion_to_rpy(
-            self.latest_pose.pose.orientation.x,
-            self.latest_pose.pose.orientation.y,
-            self.latest_pose.pose.orientation.z,
-            self.latest_pose.pose.orientation.w
-        )
+        # Extract filtered position and orientation
+        position = filtered_pose[:3].tolist()
+        rpy = filtered_pose[3:6].tolist()
         
         # Check if we need to move
         if not self.poses_are_similar(position, rpy):
@@ -181,7 +287,7 @@ class VisualServo(Node):
 def main(args=None):
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Visual Servo Node')
-    parser.add_argument('--topic', type=str, default="/object_poses/jenga_1", 
+    parser.add_argument('--topic', type=str, default="/object_poses/jenga_4", 
                        help='Topic name for pose subscription')
     parser.add_argument('--height', type=float, default=0.15,
                        help='Hover height in meters')
