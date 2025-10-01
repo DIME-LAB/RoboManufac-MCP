@@ -2,6 +2,7 @@ from builtin_interfaces.msg import Duration
 from ur_asu.custom_libraries.ik_solver import compute_ik
 
 HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0]  # XYZRPY
+# HOME_POSE = [0.065, -0.385, 0.160, 0, 180, 0] #lower home pose
 PICK_STATION_POSE = [-0.180, -0.385, 0.350, 0, 180, 0]  # XYZRPY - Pick station position
 # PICK_STATION_POSE = [0.235, -0.664, 0.350, 0, 180, 0]
 
@@ -107,9 +108,6 @@ def hover_over(target_pose, height, duration=3.0):
     # null_rot = [0, 180, 0]
     target_rot = [fixed_roll, fixed_pitch, yaw]
     segment_duration = duration # use provided duration
-    # print(block_hover, target_rot)
-    (x, y, z) = target_position
-    print(f"Made target pose of <{x:.3f}, {y:.3f}, {z:.3f}> @ rpy [{fixed_roll:.1f}, {fixed_pitch:.1f}, {yaw:.1f}] (duration: {duration}s)")
 
     return {
         # "traj0": move(target_position,null_rot,segment_duration), # hovers over target 

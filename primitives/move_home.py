@@ -5,7 +5,7 @@ from rclpy.action import ActionClient
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 
-from ur_asu.custom_libraries.actionlibraries import home
+from action_libraries import home
 
 class HomeRunner(Node):
     def __init__(self):
