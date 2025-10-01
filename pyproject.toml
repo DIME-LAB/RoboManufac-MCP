@@ -12,4 +12,10 @@ dependencies = [
     "Pillow>=10.0.0",
     "scipy>=1.11.0",
     "typing_extensions>=4.0.0",
+    "ultralytics>=8.3.204",
+    "numpy<2",
+    "clip",
 ]
+
+[tool.uv.sources]
+clip = { git = "https://github.com/ultralytics/CLIP.git" }
