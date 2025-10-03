@@ -16,6 +16,7 @@ import numpy as np
 import time
 import sys
 import yaml
+import argparse
 
 # Add path to your ur_asu package
 main_path = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main"
@@ -35,8 +36,13 @@ FORCE_CHECK_INTERVAL = 0.02  # Check force every 20ms during movement - more res
 # =============================================================================
 
 class MoveDown(Node):
-    def __init__(self):
+    def __init__(self, target_height, target_position=None, target_orientation=None, target_quaternion=None):
         super().__init__('move_down')
+        self.target_height = target_height
+        self.target_position = target_position  # [x, y, z] or None to use current position
+        self.target_orientation = target_orientation  # [roll, pitch, yaw] in degrees or None to use [0, 180, 0]
+        self.target_quaternion = target_quaternion  # [x, y, z, w] quaternion or None
+        self.movement_step = 1  # 1 = move to position, 2 = move down
         
         # Robot control setup
         self.joint_names = [
@@ -78,6 +84,9 @@ class MoveDown(Node):
         self.current_force_z = 0.0
         self.force_detected = False
         
+        # Height monitoring
+        self.height_detected = False
+        
         # Current end-effector pose
         self.current_ee_pose = None
         self.pose_received = False
@@ -111,6 +120,29 @@ class MoveDown(Node):
         # Start the move down sequence after a brief delay
         self.start_timer = self.create_timer(1.0, self.start_move_down)
     
+    def quaternion_to_rpy(self, x, y, z, w):
+        """Convert quaternion to roll, pitch, yaw in degrees"""
+        import math
+        
+        # Roll
+        sinr_cosp = 2 * (w * x + y * z)
+        cosr_cosp = 1 - 2 * (x * x + y * y)
+        roll = math.degrees(math.atan2(sinr_cosp, cosr_cosp))
+        
+        # Pitch
+        sinp = 2 * (w * y - z * x)
+        if abs(sinp) >= 1:
+            pitch = math.degrees(math.copysign(math.pi / 2, sinp))
+        else:
+            pitch = math.degrees(math.asin(sinp))
+        
+        # Yaw
+        siny_cosp = 2 * (w * z + x * y)
+        cosy_cosp = 1 - 2 * (y * y + z * z)
+        yaw = math.degrees(math.atan2(siny_cosp, cosy_cosp))
+        
+        return [roll, pitch, yaw]
+    
     def force_callback(self, msg: WrenchStamped):
         """Callback for force/torque sensor data"""
         # Extract Z force component
@@ -126,6 +158,14 @@ class MoveDown(Node):
         """Callback for current end-effector pose"""
         self.current_ee_pose = msg.pose
         self.pose_received = True
+        
+        # Check if target height is reached
+        if self.moving and not self.height_detected and not self.force_detected:
+            current_z = msg.pose.position.z
+            if current_z <= self.target_height:
+                self.get_logger().info(f"Target height reached! Current Z: {current_z:.3f}m (target: {self.target_height:.3f}m)")
+                self.height_detected = True
+                self.emergency_stop()
     
     def check_pose_and_start(self):
         """Check if pose is received and start movement with timeout"""
@@ -253,9 +293,20 @@ class MoveDown(Node):
             self.start_timer.cancel()
             self.start_timer = None
         
-        self.get_logger().info("Starting move down sequence...")
-        self.get_logger().info(f"Target force threshold: {FORCE_Z_THRESHOLD}N in Z direction")
-        self.get_logger().info(f"Final Z position: {FINAL_Z_POSITION}m")
+        if self.movement_step == 1:
+            self.get_logger().info("Starting two-step movement sequence...")
+            self.get_logger().info("Step 1: Moving to target position and orientation")
+            if self.target_position:
+                self.get_logger().info(f"Target position: {self.target_position}")
+            if self.target_quaternion:
+                self.get_logger().info(f"Target quaternion: {self.target_quaternion}")
+            elif self.target_orientation:
+                self.get_logger().info(f"Target orientation: {self.target_orientation}")
+        else:
+            self.get_logger().info("Step 2: Moving down with force monitoring")
+            self.get_logger().info(f"Target force threshold: {FORCE_Z_THRESHOLD}N in Z direction")
+            self.get_logger().info(f"Target height: {self.target_height}m")
+        
         self.get_logger().info(f"Movement duration: {MOVEMENT_DURATION}s")
         self.get_logger().info(f"Force check interval: {FORCE_CHECK_INTERVAL}s")
         
@@ -266,37 +317,76 @@ class MoveDown(Node):
             self._pose_check_timer = self.create_timer(0.1, self.check_pose_and_start)
             return
         
-        # Use actual current position from pose broadcaster
-        self.current_position = [
-            self.current_ee_pose.position.x,
-            self.current_ee_pose.position.y,
-            self.current_ee_pose.position.z
-        ]
-        self.start_position = self.current_position.copy()
-        
-        self.get_logger().info(f"Starting from actual position: {self.current_position}")
-        self.get_logger().info(f"Target final position: Z = {FINAL_Z_POSITION}m")
-        
-        # Calculate target position (keep X and Y, set Z to final position)
-        target_position = [
-            self.current_position[0],
-            self.current_position[1], 
-            FINAL_Z_POSITION
-        ]
-        
-        self.get_logger().info(f"Moving directly to target position: {target_position}")
-        
-        # Move directly to target position with force monitoring
-        self.move_to_position_with_force_monitoring(target_position)
+        if self.movement_step == 1:
+            # Step 1: Move to target X,Y position but keep current height
+            if self.target_position:
+                # Use provided X,Y but keep current Z height
+                current_z = self.current_ee_pose.position.z
+                target_position = [
+                    self.target_position[0],  # Use provided X
+                    self.target_position[1],  # Use provided Y
+                    current_z  # Keep current Z height
+                ]
+                self.get_logger().info(f"Step 1: Moving to X,Y position ({self.target_position[0]:.3f}, {self.target_position[1]:.3f}) at current height {current_z:.3f}")
+            else:
+                # No position provided, stay at current position
+                target_position = [
+                    self.current_ee_pose.position.x,
+                    self.current_ee_pose.position.y,
+                    self.current_ee_pose.position.z
+                ]
+                self.get_logger().info(f"Step 1: No target position provided, staying at current position: {target_position}")
+            
+            # Move to position without force monitoring (step 1)
+            self.move_to_position_without_force_monitoring(target_position)
+        else:
+            # Step 2: Move down with force monitoring
+            # Use the target X,Y from Step 1 (or current if no target provided)
+            if self.target_position:
+                # Use the target X,Y from Step 1
+                target_x = self.target_position[0]
+                target_y = self.target_position[1]
+                self.get_logger().info(f"Step 2: Using target X,Y from Step 1: ({target_x:.3f}, {target_y:.3f})")
+            else:
+                # No target position provided, use current X,Y
+                target_x = self.current_ee_pose.position.x
+                target_y = self.current_ee_pose.position.y
+                self.get_logger().info(f"Step 2: Using current X,Y: ({target_x:.3f}, {target_y:.3f})")
+            
+            # Calculate final target position (use target X,Y, set Z to target height)
+            target_position = [
+                target_x,
+                target_y, 
+                self.target_height
+            ]
+            
+            self.get_logger().info(f"Step 2: Moving down to {target_position}")
+            
+            # Move down with force monitoring (step 2)
+            self.move_to_position_with_force_monitoring(target_position)
     
     
     def move_to_position_with_force_monitoring(self, position):
         """Move to position with real-time force monitoring and cancellation"""
         self.moving = True
         
-        # Use IK to get joint angles
-        rpy = [0, 180, 0]  # HOME_POSE orientation from actionlibraries
+        # Use IK to get joint angles - follow visual servo pattern
+        if self.target_quaternion:
+            # Convert quaternion to RPY
+            target_rpy = self.quaternion_to_rpy(
+                self.target_quaternion[0], self.target_quaternion[1],
+                self.target_quaternion[2], self.target_quaternion[3]
+            )
+            # Apply visual servo orientation logic: fixed roll=0, pitch=180, yaw=target_yaw+90
+            rpy = [0, 180, target_rpy[2] + 90]
+        elif self.target_orientation:
+            # Apply visual servo orientation logic: fixed roll=0, pitch=180, yaw=target_yaw+90
+            rpy = [0, 180, self.target_orientation[2] + 90]
+        else:
+            rpy = [0, 180, 0]  # Default HOME_POSE orientation from actionlibraries
+        
         self.get_logger().info(f"Computing IK for position: {position} with orientation: {rpy}")
+        self.get_logger().info(f"Applied visual servo orientation logic: roll=0, pitch=180, yaw=target_yaw+90")
         joint_angles = compute_ik(position, rpy)
         
         if joint_angles is None:
@@ -321,6 +411,55 @@ class MoveDown(Node):
         
         # Execute trajectory with real-time force monitoring
         self.execute_trajectory_with_force_monitoring(trajectory_points, position)
+    
+    def move_to_position_without_force_monitoring(self, position):
+        """Move to position without force monitoring (for step 1)"""
+        self.moving = True
+        
+        # Use IK to get joint angles - follow visual servo pattern
+        if self.target_quaternion:
+            # Convert quaternion to RPY
+            target_rpy = self.quaternion_to_rpy(
+                self.target_quaternion[0], self.target_quaternion[1],
+                self.target_quaternion[2], self.target_quaternion[3]
+            )
+            # Apply visual servo orientation logic: fixed roll=0, pitch=180, yaw=target_yaw+90
+            rpy = [0, 180, target_rpy[2] + 90]
+        elif self.target_orientation:
+            # Apply visual servo orientation logic: fixed roll=0, pitch=180, yaw=target_yaw+90
+            rpy = [0, 180, self.target_orientation[2] + 90]
+        else:
+            rpy = [0, 180, 0]  # Default HOME_POSE orientation from actionlibraries
+        
+        self.get_logger().info(f"Step 1: Computing IK for position: {position} with orientation: {rpy}")
+        self.get_logger().info(f"Step 1: Applied visual servo orientation logic: roll=0, pitch=180, yaw=target_yaw+90")
+        joint_angles = compute_ik(position, rpy)
+        
+        if joint_angles is None:
+            self.get_logger().error(f"Step 1: Failed to compute IK for position {position}")
+            self.get_logger().info("Step 1: Skipping position movement, proceeding to Step 2 (move down)")
+            # Skip to step 2 - just move down from current position
+            self.movement_step = 2
+            self.sequence_started = False
+            self.start_timer = self.create_timer(1.0, self.start_move_down)
+            return
+        
+        self.get_logger().info(f"Step 1: IK computed successfully. Joint angles: {[f'{angle:.3f}' for angle in joint_angles]}")
+        
+        # Create trajectory
+        self.get_logger().info(f"Step 1: Creating trajectory for position: {position}")
+        trajectory_points = move(position, rpy, MOVEMENT_DURATION)
+        
+        if not trajectory_points:
+            self.get_logger().error(f"Failed to generate trajectory for position {position}")
+            self.moving = False
+            rclpy.shutdown()
+            return
+        
+        self.get_logger().info(f"Step 1: Trajectory created successfully with {len(trajectory_points)} points")
+        
+        # Execute trajectory without force monitoring
+        self.execute_trajectory_without_force_monitoring(trajectory_points, position)
     
     def execute_trajectory_with_force_monitoring(self, trajectory_points, target_position):
         """Execute trajectory with real-time force monitoring and cancellation"""
@@ -349,6 +488,31 @@ class MoveDown(Node):
         
         # Start force monitoring during execution
         self.start_force_monitoring()
+    
+    def execute_trajectory_without_force_monitoring(self, trajectory_points, target_position):
+        """Execute trajectory without force monitoring (for step 1)"""
+        # Create trajectory
+        trajectory = JointTrajectory()
+        trajectory.joint_names = self.joint_names
+        
+        # Convert trajectory points to JointTrajectoryPoint format
+        for point_data in trajectory_points:
+            point = JointTrajectoryPoint()
+            point.positions = point_data["positions"]
+            point.velocities = point_data["velocities"]
+            point.time_from_start = point_data["time_from_start"]
+            trajectory.points.append(point)
+        
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory = trajectory
+        goal.goal_time_tolerance = Duration(sec=1)
+        
+        # Send goal
+        self.get_logger().info("Step 1: Sending trajectory goal...")
+        self._send_goal_future = self.action_client.send_goal_async(goal)
+        self._send_goal_future.add_done_callback(
+            lambda future: self.goal_response_callback_step1(future, target_position)
+        )
     
     def start_force_monitoring(self):
         """Start monitoring force during trajectory execution"""
@@ -391,6 +555,23 @@ class MoveDown(Node):
             lambda future: self.goal_result_callback(future, target_position)
         )
     
+    def goal_response_callback_step1(self, future, target_position):
+        """Handle goal response for step 1 (without force monitoring)"""
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error("Step 1: Trajectory goal rejected!")
+            self.moving = False
+            rclpy.shutdown()
+            return
+        
+        self._current_goal_handle = goal_handle
+        self.get_logger().info("Step 1: Trajectory goal accepted.")
+        
+        self._get_result_future = goal_handle.get_result_async()
+        self._get_result_future.add_done_callback(
+            lambda future: self.goal_result_callback_step1(future, target_position)
+        )
+    
     def goal_result_callback(self, future, target_position):
         """Handle goal completion"""
         try:
@@ -411,14 +592,18 @@ class MoveDown(Node):
                 
                 if self.force_detected:
                     self.get_logger().info("Force threshold reached during movement.")
+                elif self.height_detected:
+                    self.get_logger().info("Target height reached during movement.")
                 else:
-                    self.get_logger().info("Movement completed without force threshold being reached.")
+                    self.get_logger().info("Movement completed without force threshold or height target being reached.")
                 
                 rclpy.shutdown()
             elif result.status == 5:  # PREEMPTED (cancelled)
-                self.get_logger().info("Trajectory was preempted (likely due to force threshold)")
+                self.get_logger().info("Trajectory was preempted (likely due to force threshold or height target)")
                 if self.force_detected:
                     self.get_logger().info("Force threshold reached. Movement complete.")
+                elif self.height_detected:
+                    self.get_logger().info("Target height reached. Movement complete.")
                 else:
                     self.get_logger().info("Trajectory was cancelled for unknown reason.")
                 rclpy.shutdown()
@@ -426,8 +611,10 @@ class MoveDown(Node):
                 self.get_logger().warn("Trajectory was aborted by controller")
                 if self.force_detected:
                     self.get_logger().info("Force threshold reached. Movement complete.")
+                elif self.height_detected:
+                    self.get_logger().info("Target height reached. Movement complete.")
                 else:
-                    self.get_logger().error("Trajectory was aborted without force threshold being reached.")
+                    self.get_logger().error("Trajectory was aborted without force threshold or height target being reached.")
                 rclpy.shutdown()
             else:
                 self.get_logger().error(f"Trajectory failed with status: {result.status}")
@@ -438,10 +625,55 @@ class MoveDown(Node):
             self.stop_force_monitoring()
             self.moving = False
             rclpy.shutdown()
+    
+    def goal_result_callback_step1(self, future, target_position):
+        """Handle goal completion for step 1 and transition to step 2"""
+        try:
+            result = future.result()
+            self.moving = False
+            self._current_goal_handle = None
+            
+            if result.status == 1:  # SUCCEEDED
+                self.get_logger().info("Step 1: Trajectory completed successfully")
+                self.get_logger().info("Transitioning to Step 2: Move down with force monitoring")
+                
+                # Transition to step 2
+                self.movement_step = 2
+                self.sequence_started = False  # Reset to allow step 2 to start
+                
+                # Start step 2 after a brief delay
+                self.start_timer = self.create_timer(1.0, self.start_move_down)
+                
+            else:
+                self.get_logger().error(f"Step 1: Trajectory failed with status: {result.status}")
+                self.get_logger().info("Step 1: Skipping position movement, proceeding to Step 2 (move down)")
+                # Skip to step 2 - just move down from current position
+                self.movement_step = 2
+                self.sequence_started = False
+                self.start_timer = self.create_timer(1.0, self.start_move_down)
+                
+        except Exception as e:
+            self.get_logger().error(f"Error in step 1 goal result callback: {e}")
+            self.moving = False
+            rclpy.shutdown()
 
 def main(args=None):
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Move Down Primitive with position, orientation, and height parameters')
+    parser.add_argument('--height', type=float, default=0.148, 
+                       help='Target height in meters (default: 0.148)')
+    parser.add_argument('--position', type=float, nargs=3, default=None,
+                       help='Target position [x, y, z] in meters (optional, uses current position if not provided)')
+    parser.add_argument('--orientation', type=float, nargs=3, default=None,
+                       help='Target orientation [roll, pitch, yaw] in degrees (optional, uses [0, 180, 0] if not provided)')
+    parser.add_argument('--quaternion', type=float, nargs=4, default=None,
+                       help='Target orientation [x, y, z, w] quaternion (optional, overrides orientation if provided)')
+    
+    # Parse known args to avoid conflicts with ROS2
+    known_args, unknown_args = parser.parse_known_args()
+    
     rclpy.init(args=args)
-    node = MoveDown()
+    node = MoveDown(known_args.height, known_args.position, known_args.orientation, known_args.quaternion)
     
     try:
         rclpy.spin(node)

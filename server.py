@@ -748,6 +748,89 @@ def control_gripper(command: str) -> Dict[str, Any]:
             "traceback": traceback.format_exc()
         }
 
+@mcp.tool()
+def verify_grasp(timeout: int = 5) -> Dict[str, Any]:
+    """
+    Get gripper width information including fully open, fully closed, and current width.
+    
+    Args:
+        timeout: Maximum time to wait for gripper reading (default: 5 seconds)
+        
+    Returns:
+        Dictionary with gripper width information:
+        - fully_open_width: Gripper width when fully open (110.0)
+        - fully_closed_width: Gripper width when fully closed (9.0)
+        - current_width: Current gripper width
+        - status: "success" or "error"
+    """
+    try:
+        import subprocess
+        import re
+        
+        # Gripper width constants
+        FULLY_OPEN_WIDTH = 110.0
+        FULLY_CLOSED_WIDTH = 9.0
+        
+        # Run the verify_grasp.py script
+        script_path = "/home/aaugus11/Documents/ros-mcp-server/primitives/verify_grasp.py"
+        cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && python {script_path} {timeout}"
+        
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=timeout + 5
+        )
+        
+        if result.returncode == 0:
+            # Parse the output to extract current width
+            output = result.stdout.strip()
+            current_width = None
+            
+            # Look for the current width line
+            for line in output.split('\n'):
+                if 'Gripper current width:' in line:
+                    try:
+                        current_width = float(line.split(':')[1].strip())
+                        break
+                    except (ValueError, IndexError):
+                        pass
+            
+            if current_width is not None:
+                return {
+                    "status": "success",
+                    "fully_open_width": FULLY_OPEN_WIDTH,
+                    "fully_closed_width": FULLY_CLOSED_WIDTH,
+                    "current_width": current_width,
+                    "raw_output": output
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Could not parse current width from output: {output}",
+                    "raw_output": output
+                }
+        else:
+            return {
+                "status": "error",
+                "message": f"Script failed with return code {result.returncode}",
+                "stderr": result.stderr.strip() if result.stderr else None,
+                "stdout": result.stdout.strip() if result.stdout else None
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": f"Script timed out after {timeout + 5} seconds"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Unexpected error: {str(e)}"
+        }
+
 def _get_all_mcp_tools():
     """
     Dynamically discover all available MCP tools in the current module.
@@ -1776,10 +1859,20 @@ def list_primitive_scripts():
         }
 
 @mcp.tool()
-def move_down():
+def move_down(height: float = 0.148, position: list = None, orientation: list = None, quaternion: list = None):
     """
     Execute the move_down.py primitive script.
-    This tool moves the robot down in Z-axis with real-time force monitoring and immediate trajectory cancellation.
+    This tool performs a two-step movement:
+    1. First moves to target X,Y position with specified orientation
+    2. Then moves down in Z-axis with force monitoring
+    
+    The robot will stop when either the force threshold is reached OR the target height is reached, whichever comes first.
+    
+    Args:
+        height: Target Z position in meters (default: 0.148)
+        position: Target position [x, y, z] in meters (optional, uses current position if not provided)
+        orientation: Target orientation [roll, pitch, yaw] in degrees (optional, uses [0, 180, 0] if not provided)
+        quaternion: Target orientation [x, y, z, w] quaternion (optional, overrides orientation if provided)
     
     Returns:
         Dictionary with execution status and results
@@ -1798,15 +1891,40 @@ def move_down():
                 "error": f"Move down script not found: {script_path}"
             }
         
-        # Source ROS2 environment and run script
-        cmd = f"""
-source /opt/ros/humble/setup.bash
-source ~/Desktop/ros2_ws/install/setup.bash
-source ~/ros2/install/setup.bash
-export ROS_DOMAIN_ID=0
-cd /home/aaugus11/Documents/ros-mcp-server/primitives
-/usr/bin/python3 move_down.py
-"""
+        # Build command with optional parameters
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash", 
+            "export ROS_DOMAIN_ID=0",
+            "cd /home/aaugus11/Documents/ros-mcp-server/primitives",
+            f"/usr/bin/python3 move_down.py --height {height}"
+        ]
+        
+        # Build the python command with all parameters
+        python_cmd = f"/usr/bin/python3 move_down.py --height {height}"
+        
+        # Add position parameter if provided
+        if position and len(position) == 3:
+            python_cmd += f" --position {' '.join(map(str, position))}"
+        
+        # Add orientation parameter if provided  
+        if orientation and len(orientation) == 3:
+            python_cmd += f" --orientation {' '.join(map(str, orientation))}"
+        
+        # Add quaternion parameter if provided (overrides orientation)
+        if quaternion and len(quaternion) == 4:
+            python_cmd += f" --quaternion {' '.join(map(str, quaternion))}"
+        
+        # Build final command
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash", 
+            "export ROS_DOMAIN_ID=0",
+            "cd /home/aaugus11/Documents/ros-mcp-server/primitives",
+            python_cmd
+        ]
+        
+        cmd = "\n".join(cmd_parts)
         
         # Run with bash shell to source environment
         result = subprocess.run(
@@ -1936,6 +2054,146 @@ timeout {duration + 5} /usr/bin/python3 visual_servo.py --topic {topic_name} --h
             "topic_name": topic_name,
             "hover_height": hover_height,
             "duration": duration,
+            "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def visual_servo_yoloe(topic_name: str = "/objects_poses", object_name: str = "blue_dot_0", hover_height: float = 0.15, duration: int = 30, movement_duration: float = 7.0, target_xyz: Optional[List[float]] = None, target_xyzw: Optional[List[float]] = None):
+    """
+    Execute visual servo YOLO for object detection and robot movement.
+    This tool uses YOLO-based visual servoing to move the robot to a specific object.
+    
+    IMPORTANT: When providing target_xyz, you MUST also provide target_xyzw for proper orientation.
+    Both position and orientation are required together for accurate robot movement.
+    
+    Args:
+        topic_name: ROS topic for object poses (default: "/objects_poses")
+        object_name: Name of the object to move to (default: "blue_dot_0")
+        hover_height: Height above the object to hover in meters (default: 0.15)
+        duration: Maximum duration in seconds (default: 30)
+        movement_duration: Duration for the movement in seconds (default: 7.0)
+        target_xyz: Target position [x, y, z] in meters - REQUIRED with target_xyzw (default: None)
+        target_xyzw: Target orientation [x, y, z, w] quaternion - REQUIRED with target_xyz (default: None)
+    
+    Usage:
+        - For object detection: Don't provide target_xyz or target_xyzw
+        - For manual targeting: Provide BOTH target_xyz AND target_xyzw together
+    
+    Returns:
+        Dictionary with execution status and results
+    """
+    try:
+        import subprocess
+        import os
+        
+        # Path to the visual_servo_yoloe.py script
+        script_path = "/home/aaugus11/Documents/ros-mcp-server/primitives/visual_servo_yoloe.py"
+        
+        # Check if script exists
+        if not os.path.exists(script_path):
+            return {
+                "status": "error",
+                "error": f"Visual servo YOLO script not found: {script_path}"
+            }
+        
+        # Validate that both target_xyz and target_xyzw are provided together
+        if (target_xyz is not None and target_xyzw is None) or (target_xyz is None and target_xyzw is not None):
+            return {
+                "status": "error",
+                "error": "Both target_xyz and target_xyzw must be provided together for manual targeting. Use either both parameters or neither (for object detection mode).",
+                "target_xyz_provided": target_xyz is not None,
+                "target_xyzw_provided": target_xyzw is not None
+            }
+        
+        # Build command with optional parameters
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash",
+            "export ROS_DOMAIN_ID=0",
+            "cd /home/aaugus11/Documents/ros-mcp-server/primitives",
+            f"timeout {duration + 5} /usr/bin/python3 visual_servo_yoloe.py --topic {topic_name} --object-name \"{object_name}\" --height {hover_height} --duration {duration} --movement-duration {movement_duration}"
+        ]
+        
+        # Add optional target position if provided
+        if target_xyz is not None and len(target_xyz) == 3:
+            cmd_parts[-1] += f" --target-xyz {' '.join(map(str, target_xyz))}"
+        
+        # Add optional target orientation if provided
+        if target_xyzw is not None and len(target_xyzw) == 4:
+            cmd_parts[-1] += f" --target-xyzw {' '.join(map(str, target_xyzw))}"
+        
+        cmd = "\n".join(cmd_parts)
+        
+        # Run with bash shell to source environment
+        # subprocess.run() is SYNCHRONOUS - it waits for completion before returning
+        # This ensures the MCP tool doesn't proceed until visual servo is done
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=duration + 10  # Add buffer for startup/shutdown
+        )
+        
+        if result.returncode == 0:
+            # Check if the script actually completed successfully by looking for completion message
+            output = result.stdout.strip() if result.stdout else ""
+            success_indicators = ["Direct movement completed", "Trajectory sent successfully", "Exiting"]
+            is_completed = any(indicator in output for indicator in success_indicators)
+            
+            return {
+                "status": "success",
+                "message": "Visual servo YOLO completed successfully",
+                "topic_name": topic_name,
+                "object_name": object_name,
+                "hover_height": hover_height,
+                "duration": duration,
+                "movement_duration": movement_duration,
+                "target_xyz": target_xyz,
+                "target_xyzw": target_xyzw,
+                "output": output,
+                "movement_completed": is_completed
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Visual servo YOLO failed",
+                "error": result.stderr.strip() if result.stderr else "Unknown error",
+                "output": result.stdout.strip() if result.stdout else None,
+                "topic_name": topic_name,
+                "object_name": object_name,
+                "hover_height": hover_height,
+                "duration": duration,
+                "movement_duration": movement_duration,
+                "target_xyz": target_xyz,
+                "target_xyzw": target_xyzw,
+                "return_code": result.returncode
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "timeout",
+            "message": f"Visual servo YOLO timed out after {duration + 10} seconds",
+            "topic_name": topic_name,
+            "object_name": object_name,
+            "hover_height": hover_height,
+            "duration": duration,
+            "movement_duration": movement_duration,
+            "target_xyz": target_xyz,
+            "target_xyzw": target_xyzw
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "topic_name": topic_name,
+            "object_name": object_name,
+            "hover_height": hover_height,
+            "duration": duration,
+            "movement_duration": movement_duration,
+            "target_xyz": target_xyz,
+            "target_xyzw": target_xyzw,
             "traceback": traceback.format_exc()
         }
 
@@ -2074,17 +2332,15 @@ def run_prompt_free_detection():
         }
 
 @mcp.tool()
-def update_yolo_prompts(prompts: List[str], color_map: Optional[dict] = None):
+def update_yolo_prompts(color_map: dict):
     """
     Update YOLO detection prompts using the UpdateYoloPrompts ROS2 service.
     This CORRECTS mislabeled objects from the prompt-free YOLO detector.
     
     ⚠️ CRITICAL: The color_map maps FROM what YOLO wrongly detected TO what it actually is!
+    The prompts are automatically derived from the color_map keys.
     
     Args:
-        prompts: List of WRONG labels that YOLO detected (from annotated image)
-                 Example: ["cork", "first-aid kit", "envelope", "clipboard"]
-                 
         color_map: Dictionary that CORRECTS wrong labels
                    ⚠️ KEY = What YOLO WRONGLY detected (look at annotated image labels)
                    ⚠️ VALUE = What the object ACTUALLY is (what you want it called)
@@ -2104,15 +2360,12 @@ def update_yolo_prompts(prompts: List[str], color_map: Optional[dict] = None):
         # - "envelope" (but it's actually a blue block)
         # - "first-aid kit" (but it's actually a white box)
         
-        update_yolo_prompts(
-            prompts=["cork", "first-aid kit", "envelope", "clipboard"],  # WRONG labels from YOLO
-            color_map={
-                "cork": "jenga block",           # YOLO said "cork" → Actually "jenga block"
-                "first-aid kit": "white box",    # YOLO said "first-aid kit" → Actually "white box"
-                "envelope": "blue block",        # YOLO said "envelope" → Actually "blue block"
-                "clipboard": "red block"         # YOLO said "clipboard" → Actually "red block"
-            }
-        )
+        update_yolo_prompts({
+            "cork": "jenga block",           # YOLO said "cork" → Actually "jenga block"
+            "first-aid kit": "white box",    # YOLO said "first-aid kit" → Actually "white box"
+            "envelope": "blue block",        # YOLO said "envelope" → Actually "blue block"
+            "clipboard": "red block"         # YOLO said "clipboard" → Actually "red block"
+        })
         
         # Step-by-step for VLM:
         # 1. Look at ANNOTATED image - read the wrong labels YOLO put on each object
@@ -2122,6 +2375,9 @@ def update_yolo_prompts(prompts: List[str], color_map: Optional[dict] = None):
     try:
         import subprocess
         import os
+        
+        # Derive prompts from color_map keys
+        prompts = list(color_map.keys())
         
         # Path to the update service script
         script_path = "/home/aaugus11/Documents/ros-mcp-server/yoloe/update_yolo_prompts_service.py"
@@ -2143,15 +2399,14 @@ def update_yolo_prompts(prompts: List[str], color_map: Optional[dict] = None):
             f"python3 update_yolo_prompts_service.py"
         ]
         
-        # Add prompts to the command
+        # Add prompts to the command (derived from color_map keys)
         for prompt in prompts:
             cmd_parts[2] += f" '{prompt}'"
         
-        # Add color map if provided
-        if color_map:
-            cmd_parts[2] += " --color-map"
-            for prompt, color in color_map.items():
-                cmd_parts[2] += f" '{prompt}:{color}'"
+        # Add color map
+        cmd_parts[2] += " --color-map"
+        for prompt, color in color_map.items():
+            cmd_parts[2] += f" '{prompt}:{color}'"
         
         # Execute the service call
         result = subprocess.run(
@@ -2188,6 +2443,138 @@ def update_yolo_prompts(prompts: List[str], color_map: Optional[dict] = None):
             "status": "error",
             "error": str(e),
             "traceback": traceback.format_exc()
+        }
+
+@mcp.tool()
+def move_to_safe_height(safe_height: float = 0.481) -> Dict[str, Any]:
+    """
+    Move robot to safe height while maintaining current position.
+    Reads current end-effector pose and moves to same x,y coordinates with specified z height.
+    Uses fixed orientation [0, 180, 0] for consistent downward-pointing end-effector.
+    
+    Args:
+        safe_height: Target Z height in meters (default: 0.481)
+        
+    Returns:
+        Dictionary with execution status and results
+    """
+    try:
+        import subprocess
+        import yaml
+        import re
+        import sys
+        import os
+        
+        # Add custom libraries to Python path
+        custom_lib_path = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries"
+        if custom_lib_path not in sys.path:
+            sys.path.append(custom_lib_path)
+        
+        from ik_solver import compute_ik
+        
+        def quaternion_to_rpy(x, y, z, w):
+            """Convert quaternion to roll, pitch, yaw in degrees"""
+            import math
+            
+            # Roll
+            sinr_cosp = 2 * (w * x + y * z)
+            cosr_cosp = 1 - 2 * (x * x + y * y)
+            roll = math.degrees(math.atan2(sinr_cosp, cosr_cosp))
+            
+            # Pitch
+            sinp = 2 * (w * y - z * x)
+            if abs(sinp) >= 1:
+                pitch = math.degrees(math.copysign(math.pi / 2, sinp))
+            else:
+                pitch = math.degrees(math.asin(sinp))
+            
+            # Yaw
+            siny_cosp = 2 * (w * z + x * y)
+            cosy_cosp = 1 - 2 * (y * y + z * z)
+            yaw = math.degrees(math.atan2(siny_cosp, cosy_cosp))
+            
+            return [roll, pitch, yaw]
+        
+        # Read current end-effector pose (same method as move_down.py)
+        result = subprocess.run([
+            'bash', '-c', 
+            'source /opt/ros/humble/setup.bash && ros2 topic echo /tcp_pose_broadcaster/pose --once'
+        ], capture_output=True, text=True, timeout=10)
+        
+        if result.returncode != 0:
+            return {
+                "status": "error",
+                "message": f"Failed to read pose topic: {result.stderr}"
+            }
+        
+        # Clean the output to remove special characters (same as standalone script)
+        cleaned_output = result.stdout
+        
+        # Remove ANSI escape sequences and other special characters
+        cleaned_output = re.sub(r'\x1b\[[0-9;]*m', '', cleaned_output)  # Remove ANSI color codes
+        cleaned_output = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', cleaned_output)  # Remove other escape sequences
+        cleaned_output = re.sub(r'[^\x20-\x7E\n\r]', '', cleaned_output)  # Keep only printable ASCII and newlines
+        
+        # Find the YAML content between the --- markers
+        yaml_start = cleaned_output.find('---')
+        yaml_end = cleaned_output.rfind('---')
+        
+        if yaml_start != -1 and yaml_end != -1 and yaml_end > yaml_start:
+            yaml_content = cleaned_output[yaml_start:yaml_end].strip()
+        else:
+            yaml_content = cleaned_output.strip()
+        
+        # Parse the YAML output
+        data = yaml.safe_load(yaml_content)
+        
+        if 'pose' not in data:
+            return {
+                "status": "error",
+                "message": "No pose data found in command output"
+            }
+        
+        pose_data = data['pose']
+        current_pos = [
+            pose_data['position']['x'],
+            pose_data['position']['y'], 
+            pose_data['position']['z']
+        ]
+        
+        current_quat = [
+            pose_data['orientation']['x'],
+            pose_data['orientation']['y'],
+            pose_data['orientation']['z'],
+            pose_data['orientation']['w']
+        ]
+        
+        # Convert to RPY
+        current_rpy = quaternion_to_rpy(
+            current_quat[0], current_quat[1], 
+            current_quat[2], current_quat[3]
+        )
+        
+        # Create target pose
+        target_position = current_pos.copy()
+        target_position[2] = safe_height
+        
+        target_rpy = [0, 180, 0]  # Fixed orientation [0, 180, 0]
+        
+        # Compute IK
+        joint_angles = compute_ik(target_position, target_rpy)
+        
+        if joint_angles is None:
+            return {
+                "status": "error",
+                "message": "IK failed: couldn't compute safe height position"
+            }
+        
+        # Execute movement using existing execute_joint_trajectory function
+        return execute_joint_trajectory(joint_angles.tolist(), 3.0)
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to move to safe height: {str(e)}"
         }
 
 @mcp.tool()

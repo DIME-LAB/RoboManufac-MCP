@@ -94,7 +94,7 @@ class SimplePhotoCapture(Node):
             self.get_logger().info(f"✅ Loaded YOLOE prompt-free model")
             
             # Run prediction (no prompts needed for prompt-free model)
-            results = model(image, verbose=False, conf=0.3)
+            results = model(image, verbose=False, conf=0.45)
             
             # Check results and annotate
             if results and results[0].boxes is not None and len(results[0].boxes) > 0:

@@ -3,7 +3,7 @@ from ur_asu.custom_libraries.ik_solver import compute_ik
 
 HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0]  # XYZRPY
 # HOME_POSE = [0.065, -0.385, 0.160, 0, 180, 0] #lower home pose
-PICK_STATION_POSE = [-0.180, -0.385, 0.350, 0, 180, 0]  # XYZRPY - Pick station position
+PICK_STATION_POSE = [-0.180, -0.385, 0.481, 0, 180, 0]  # XYZRPY - Pick station position
 # PICK_STATION_POSE = [0.235, -0.664, 0.350, 0, 180, 0]
 
 def make_point(joint_positions, seconds):

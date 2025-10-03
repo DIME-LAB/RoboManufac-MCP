@@ -121,13 +121,15 @@ class PoseKalmanFilter:
         return self.x[:6], self.x[6:12]
 
 class DirectObjectMove(Node):
-    def __init__(self, topic_name="/objects_poses", object_name="blue_dot_0", hover_height=0.15, movement_duration=7.0):
+    def __init__(self, topic_name="/objects_poses", object_name="blue_dot_0", hover_height=0.15, movement_duration=7.0, target_xyz=None, target_xyzw=None):
         super().__init__('direct_object_move')
         
         self.topic_name = topic_name
         self.object_name = object_name
         self.hover_height = hover_height
         self.movement_duration = movement_duration  # Duration for IK movement
+        self.target_xyz = target_xyz  # Optional target position [x, y, z]
+        self.target_xyzw = target_xyzw  # Optional target orientation [x, y, z, w]
         self.last_target_pose = None
         self.position_threshold = 0.005  # 5mm
         self.angle_threshold = 2.0       # 2 degrees
@@ -246,33 +248,52 @@ class DirectObjectMove(Node):
     
     def timer_callback(self):
         """Process pose and perform single direct movement to object"""
-        if self.latest_pose is None or self.movement_completed:
+        if self.movement_completed:
             return
         
-        # Calculate time delta for Kalman filter
-        current_time = self.get_clock().now().nanoseconds / 1e9
-        if self.last_update_time is not None:
-            dt = current_time - self.last_update_time
-        else:
-            dt = 1.0  # Default time step
-        self.last_update_time = current_time
-        
-        # Update Kalman filter with new measurement
-        filtered_pose, velocity = self.kalman_filter.update(self.latest_pose, dt)
-        
-        if filtered_pose is None:
-            return
+        # Check if we have optional target position/orientation
+        if self.target_xyz is not None and self.target_xyzw is not None:
+            # Use provided target position and orientation
+            position = self.target_xyz[:3].copy()  # Take first 3 elements and make a copy
             
-        # Extract filtered position and orientation
-        position = filtered_pose[:3].tolist()
-        rpy = filtered_pose[3:6].tolist()
-        
-        # Apply calibration offset to correct systematic detection bias
-        position[0] += self.calibration_offset_x  # Correct X offset
-        position[1] += self.calibration_offset_y  # Correct Y offset
-        
-        # Perform single direct movement to object
-        self.get_logger().info(f"🎯 Moving to object at ({position[0]:.3f}, {position[1]:.3f}) at height {self.hover_height:.3f}m")
+            # Apply calibration offset to correct systematic detection bias (same as detected objects)
+            position[0] += self.calibration_offset_x  # Correct X offset
+            position[1] += self.calibration_offset_y  # Correct Y offset
+            
+            rpy = self.quaternion_to_rpy(
+                self.target_xyzw[0], self.target_xyzw[1], 
+                self.target_xyzw[2], self.target_xyzw[3]
+            )
+            self.get_logger().info(f"🎯 Using provided target position: {position} (with calibration offset applied) and orientation: {rpy}")
+        elif self.latest_pose is not None:
+            # Use detected object pose
+            # Calculate time delta for Kalman filter
+            current_time = self.get_clock().now().nanoseconds / 1e9
+            if self.last_update_time is not None:
+                dt = current_time - self.last_update_time
+            else:
+                dt = 1.0  # Default time step
+            self.last_update_time = current_time
+            
+            # Update Kalman filter with new measurement
+            filtered_pose, velocity = self.kalman_filter.update(self.latest_pose, dt)
+            
+            if filtered_pose is None:
+                return
+                
+            # Extract filtered position and orientation
+            position = filtered_pose[:3].tolist()
+            rpy = filtered_pose[3:6].tolist()
+            
+            # Apply calibration offset to correct systematic detection bias
+            position[0] += self.calibration_offset_x  # Correct X offset
+            position[1] += self.calibration_offset_y  # Correct Y offset
+            
+            self.get_logger().info(f"🎯 Moving to detected object at ({position[0]:.3f}, {position[1]:.3f}) at height {self.hover_height:.3f}m")
+        else:
+            # No target provided and no object detected
+            self.get_logger().warn("No target position provided and no object detected")
+            return
         
         # Create target pose at final height
         target_position = [position[0], position[1], self.hover_height]
@@ -330,7 +351,7 @@ def main(args=None):
     parser = argparse.ArgumentParser(description='Direct Object Movement Node')
     parser.add_argument('--topic', type=str, default="/objects_poses", 
                        help='Topic name for object poses subscription')
-    parser.add_argument('--object-name', type=str, default="box_dot_0",
+    parser.add_argument('--object-name', type=str, default="tripod_dot_0",
                        help='Name of the object to move to (e.g., blue_dot_0, red_dot_0)')
     parser.add_argument('--height', type=float, default=0.15,
                        help='Hover height in meters')
@@ -338,6 +359,10 @@ def main(args=None):
                        help='Maximum duration in seconds')
     parser.add_argument('--movement-duration', type=float, default=7.0,
                        help='Duration for the movement in seconds (default: 7.0)')
+    parser.add_argument('--target-xyz', type=float, nargs=3, default=None,
+                       help='Optional target position [x, y, z] in meters')
+    parser.add_argument('--target-xyzw', type=float, nargs=4, default=None,
+                       help='Optional target orientation [x, y, z, w] quaternion')
     
     # Parse arguments from sys.argv if args is None
     if args is None:
@@ -347,7 +372,8 @@ def main(args=None):
     
     rclpy.init(args=None)
     node = DirectObjectMove(topic_name=args.topic, object_name=args.object_name, 
-                      hover_height=args.height, movement_duration=args.movement_duration)
+                      hover_height=args.height, movement_duration=args.movement_duration,
+                      target_xyz=args.target_xyz, target_xyzw=args.target_xyzw)
     
     import time
     start_time = time.time()
