@@ -357,8 +357,8 @@ def main(args=None):
                        help='Hover height in meters')
     parser.add_argument('--duration', type=int, default=30,
                        help='Maximum duration in seconds')
-    parser.add_argument('--movement-duration', type=float, default=7.0,
-                       help='Duration for the movement in seconds (default: 7.0)')
+    parser.add_argument('--movement-duration', type=float, default=5.0,
+                       help='Duration for the movement in seconds (default: 5.0)')
     parser.add_argument('--target-xyz', type=float, nargs=3, default=None,
                        help='Optional target position [x, y, z] in meters')
     parser.add_argument('--target-xyzw', type=float, nargs=4, default=None,
