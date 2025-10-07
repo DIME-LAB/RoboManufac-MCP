@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Simple Visual Servoing - Native ROS2 Node
-Just read pose, convert to RPY, and hover
+Direct Object Movement - Native ROS2 Node
+Read object poses from ObjectPoseArray and perform single direct movement to specific object by name
+Includes calibration offset correction for accurate positioning
+Supports grasp point selection from /grasp_points topic
 """
 
 import rclpy
@@ -17,15 +19,24 @@ import argparse
 import numpy as np
 
 # Import from local action_libraries file
-from action_libraries import hover_over
+from action_libraries import hover_over_grasp
 
-# Import the new message type
+# Import the new message types
 try:
     from max_camera_msgs.msg import ObjectPoseArray
 except ImportError:
     # Fallback if the message type is not available
     print("Warning: max_camera_msgs not found. Using geometry_msgs.PoseStamped as fallback.")
     ObjectPoseArray = None
+
+# Import grasp points message type
+try:
+    from max_camera_msgs.msg import GraspPointArray, GraspPoint
+except ImportError:
+    # Fallback if the message type is not available
+    print("Warning: max_camera_msgs GraspPointArray not found. Using geometry_msgs.PoseStamped as fallback.")
+    GraspPointArray = None
+    GraspPoint = None
 
 class PoseKalmanFilter:
     """Kalman filter for pose estimation and smoothing"""
@@ -119,21 +130,32 @@ class PoseKalmanFilter:
             return None, None
         return self.x[:6], self.x[6:12]
 
-class VisualServo(Node):
-    def __init__(self, topic_name="/objects_poses", object_name="jenga_4", hover_height=0.15, movement_duration=7.0):
-        super().__init__('visual_servo')
+class DirectObjectMove(Node):
+    def __init__(self, topic_name="/objects_poses", object_name="blue_dot_0", hover_height=0.15, movement_duration=7.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None):
+        super().__init__('direct_object_move')
         
         self.topic_name = topic_name
         self.object_name = object_name
         self.hover_height = hover_height
         self.movement_duration = movement_duration  # Duration for IK movement
+        self.target_xyz = target_xyz  # Optional target position [x, y, z]
+        self.target_xyzw = target_xyzw  # Optional target orientation [x, y, z, w]
+        self.grasp_points_topic = grasp_points_topic  # Topic for grasp points
+        self.grasp_id = grasp_id  # Specific grasp point ID to use
         self.last_target_pose = None
         self.position_threshold = 0.005  # 5mm
         self.angle_threshold = 2.0       # 2 degrees
+        # Calibration offset to correct systematic detection bias
+        self.calibration_offset_x = -0.013  # -13mm correction (move left)
+        self.calibration_offset_y = +0.028  # +28mm correction (move forward)
         
         # Initialize Kalman filter
         self.kalman_filter = PoseKalmanFilter(process_noise=0.005, measurement_noise=0.05)
         self.last_update_time = None
+        
+        # Store latest grasp points
+        self.latest_grasp_points = None
+        self.selected_grasp_point = None
         
         # Subscribe to object poses topic
         if ObjectPoseArray is not None:
@@ -152,11 +174,24 @@ class VisualServo(Node):
                 5
             )
         
+        # Subscribe to grasp points topic if grasp_id is provided
+        if self.grasp_id is not None and GraspPointArray is not None:
+            self.grasp_points_sub = self.create_subscription(
+                GraspPointArray,
+                grasp_points_topic,
+                self.grasp_points_callback,
+                5
+            )
+            self.get_logger().info(f"🎯 Grasp point mode: Looking for grasp_id {grasp_id} on topic {grasp_points_topic}")
+        else:
+            self.grasp_points_sub = None
+            if self.grasp_id is not None:
+                self.get_logger().warn(f"⚠️ Grasp point mode requested but GraspPointArray not available. Falling back to object center.")
+        
         # Add timer to control update frequency (every 2 seconds = 0.5Hz)
         self.update_timer = self.create_timer(3.0, self.timer_callback)
         self.latest_pose = None
-        self.stable_count = 0  # Count consecutive stable readings
-        self.stable_threshold = 1  # Exit after 3 consecutive stable readings (9 seconds total)
+        self.movement_completed = False  # Flag to track if movement has been completed
         self.should_exit = False  # Flag to control exit
         
         # Action client for trajectory execution
@@ -166,9 +201,13 @@ class VisualServo(Node):
             '/scaled_joint_trajectory_controller/follow_joint_trajectory'
         )
         
-        self.get_logger().info(f"🤖 Visual servo started for object '{object_name}' on topic {topic_name}")
-        self.get_logger().info(f"📏 Hover height: {hover_height}m")
+        self.get_logger().info(f"🤖 Direct object movement started for object '{object_name}' on topic {topic_name}")
+        self.get_logger().info(f"📏 Target height: {hover_height}m")
         self.get_logger().info(f"⏱️ Movement duration: {movement_duration}s")
+        if self.grasp_id is not None:
+            self.get_logger().info(f"🎯 Grasp point mode: Using grasp_id {grasp_id} from topic {grasp_points_topic}")
+        else:
+            self.get_logger().info(f"🎯 Object center mode: Moving to object center")
         
     def quaternion_to_rpy(self, x, y, z, w):
         """Convert quaternion to roll, pitch, yaw in degrees"""
@@ -241,53 +280,112 @@ class VisualServo(Node):
         """Store latest pose message (fallback for PoseStamped)"""
         self.latest_pose = msg
     
+    def grasp_points_callback(self, msg):
+        """Handle GraspPointArray message and find target grasp point"""
+        if GraspPointArray is None:
+            return
+            
+        # Store all grasp points
+        self.latest_grasp_points = msg
+        
+        # Find the grasp point with the specified ID and object name
+        target_grasp_point = None
+        for grasp_point in msg.grasp_points:
+            if (grasp_point.grasp_id == self.grasp_id and 
+                grasp_point.object_name == self.object_name):
+                target_grasp_point = grasp_point
+                break
+        
+        if target_grasp_point is not None:
+            self.selected_grasp_point = target_grasp_point
+            self.get_logger().info(f"🎯 Found grasp point {self.grasp_id} for object '{self.object_name}'")
+        else:
+            # Grasp point not found in this message
+            self.get_logger().warn(f"Grasp point {self.grasp_id} for object '{self.object_name}' not found in current message")
+            self.selected_grasp_point = None
+    
     def timer_callback(self):
-        """Process pose at controlled frequency with Kalman filtering"""
-        if self.latest_pose is None:
+        """Process pose and perform single direct movement to object"""
+        if self.movement_completed:
             return
         
-        # Calculate time delta for Kalman filter
-        current_time = self.get_clock().now().nanoseconds / 1e9
-        if self.last_update_time is not None:
-            dt = current_time - self.last_update_time
+        # Check if we have optional target position/orientation
+        if self.target_xyz is not None and self.target_xyzw is not None:
+            # Use provided target position and orientation
+            position = self.target_xyz[:3].copy()  # Take first 3 elements and make a copy
+            
+            # Apply calibration offset to correct systematic detection bias (same as detected objects)
+            position[0] += self.calibration_offset_x  # Correct X offset
+            position[1] += self.calibration_offset_y  # Correct Y offset
+            
+            rpy = self.quaternion_to_rpy(
+                self.target_xyzw[0], self.target_xyzw[1], 
+                self.target_xyzw[2], self.target_xyzw[3]
+            )
+            self.get_logger().info(f"🎯 Using provided target position: {position} (with calibration offset applied) and orientation: {rpy}")
+        elif self.selected_grasp_point is not None:
+            # Use grasp point position and approach vector
+            position = [
+                self.selected_grasp_point.position.x,
+                self.selected_grasp_point.position.y,
+                self.selected_grasp_point.position.z
+            ]
+            
+            # Apply calibration offset to correct systematic detection bias
+            position[0] += self.calibration_offset_x  # Correct X offset
+            position[1] += self.calibration_offset_y  # Correct Y offset
+            
+            # Use approach vector to determine orientation
+            approach = self.selected_grasp_point.approach_vector
+            # Convert approach vector to RPY (simplified - assuming approach vector is the z-axis direction)
+            # For now, we'll use a default orientation and let the user specify if needed
+            rpy = [0, 180, 0]  # Default downward orientation
+            
+            self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {position} (with calibration offset applied)")
+            self.get_logger().info(f"🎯 Approach vector: [{approach.x:.3f}, {approach.y:.3f}, {approach.z:.3f}]")
+        elif self.latest_pose is not None:
+            # Use detected object pose
+            # Calculate time delta for Kalman filter
+            current_time = self.get_clock().now().nanoseconds / 1e9
+            if self.last_update_time is not None:
+                dt = current_time - self.last_update_time
+            else:
+                dt = 1.0  # Default time step
+            self.last_update_time = current_time
+            
+            # Update Kalman filter with new measurement
+            filtered_pose, velocity = self.kalman_filter.update(self.latest_pose, dt)
+            
+            if filtered_pose is None:
+                return
+                
+            # Extract filtered position and orientation
+            position = filtered_pose[:3].tolist()
+            rpy = filtered_pose[3:6].tolist()
+            
+            # Apply calibration offset to correct systematic detection bias
+            position[0] += self.calibration_offset_x  # Correct X offset
+            position[1] += self.calibration_offset_y  # Correct Y offset
+            
+            self.get_logger().info(f"🎯 Moving to detected object at ({position[0]:.3f}, {position[1]:.3f}) at height {self.hover_height:.3f}m")
         else:
-            dt = 1.0  # Default time step
-        self.last_update_time = current_time
-        
-        # Update Kalman filter with new measurement
-        filtered_pose, velocity = self.kalman_filter.update(self.latest_pose, dt)
-        
-        if filtered_pose is None:
+            # No target provided and no object detected
+            self.get_logger().warn("No target position provided and no object detected")
             return
-            
-        # Extract filtered position and orientation
-        position = filtered_pose[:3].tolist()
-        rpy = filtered_pose[3:6].tolist()
         
-        # Check if we need to move
-        if not self.poses_are_similar(position, rpy):
-            self.get_logger().info(f"🎯 Moving to hover over: ({position[0]:.3f}, {position[1]:.3f}) "
-                                  f"at height {self.hover_height:.3f}m, yaw={rpy[2]:.1f}°")
-            
-            # Reset stable count when movement is needed
-            self.stable_count = 0
-            
-            # Use hover_over function with custom duration
-            target_pose = (position, rpy)
-            trajectory = hover_over(target_pose, self.hover_height, self.movement_duration)
-            
-            # Execute trajectory
-            self.execute_trajectory(trajectory)
-            self.last_target_pose = (position, rpy)
-        else:
-            self.stable_count += 1
-            self.get_logger().info(f"🔄 Tracking: ({position[0]:.3f}, {position[1]:.3f}) "
-                                  f"yaw={rpy[2]:.1f}° (stable {self.stable_count}/{self.stable_threshold})")
-            
-            # Exit if we've been stable for enough consecutive readings
-            if self.stable_count >= self.stable_threshold:
-                self.get_logger().info("✅ Successfully aligned and stable. Exiting visual servo.")
-                self.should_exit = True
+        # Create target pose at final height
+        target_position = [position[0], position[1], self.hover_height]
+        target_pose = (target_position, rpy)
+        
+        trajectory = hover_over_grasp(target_pose, self.hover_height, self.movement_duration)
+        
+        # Execute trajectory
+        self.execute_trajectory(trajectory)
+        self.movement_completed = True
+        
+        # Exit after movement
+        self.get_logger().info("✅ Direct movement completed. Exiting.")
+        self.should_exit = True
     
     def execute_trajectory(self, trajectory):
         """Execute trajectory using ROS2 action"""
@@ -295,6 +393,7 @@ class VisualServo(Node):
             if 'traj1' not in trajectory or not trajectory['traj1']:
                 self.get_logger().error("No trajectory found")
                 return
+            
             
             point = trajectory['traj1'][0]
             positions = point['positions']
@@ -327,17 +426,25 @@ class VisualServo(Node):
 
 def main(args=None):
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Visual Servo Node')
+    parser = argparse.ArgumentParser(description='Direct Object Movement Node')
     parser.add_argument('--topic', type=str, default="/objects_poses", 
                        help='Topic name for object poses subscription')
-    parser.add_argument('--object-name', type=str, default="jenga_4",
-                       help='Name of the object to move to (e.g., jenga_4, blue_dot_0)')
+    parser.add_argument('--object-name', type=str, default="fork_orange_scaled70",
+                       help='Name of the object to move to (e.g., blue_dot_0, red_dot_0)')
     parser.add_argument('--height', type=float, default=0.15,
                        help='Hover height in meters')
     parser.add_argument('--duration', type=int, default=30,
                        help='Maximum duration in seconds')
-    parser.add_argument('--movement-duration', type=float, default=7.0,
-                       help='Duration for each IK movement in seconds (default: 7.0)')
+    parser.add_argument('--movement-duration', type=float, default=5.0,
+                       help='Duration for the movement in seconds (default: 5.0)')
+    parser.add_argument('--target-xyz', type=float, nargs=3, default=None,
+                       help='Optional target position [x, y, z] in meters')
+    parser.add_argument('--target-xyzw', type=float, nargs=4, default=None,
+                       help='Optional target orientation [x, y, z, w] quaternion')
+    parser.add_argument('--grasp-points-topic', type=str, default="/grasp_points",
+                       help='Topic name for grasp points subscription')
+    parser.add_argument('--grasp-id', type=int, default=None,
+                       help='Specific grasp point ID to use (if provided, will use grasp point instead of object center)')
     
     # Parse arguments from sys.argv if args is None
     if args is None:
@@ -346,7 +453,10 @@ def main(args=None):
         args = parser.parse_args(args)
     
     rclpy.init(args=None)
-    node = VisualServo(topic_name=args.topic, object_name=args.object_name, hover_height=args.height, movement_duration=args.movement_duration)
+    node = DirectObjectMove(topic_name=args.topic, object_name=args.object_name, 
+                      hover_height=args.height, movement_duration=args.movement_duration,
+                      target_xyz=args.target_xyz, target_xyzw=args.target_xyzw,
+                      grasp_points_topic=args.grasp_points_topic, grasp_id=args.grasp_id)
     
     import time
     start_time = time.time()
@@ -355,14 +465,14 @@ def main(args=None):
         while rclpy.ok() and not node.should_exit:
             # Check if we've exceeded the duration
             if time.time() - start_time > args.duration:
-                node.get_logger().info(f"⏰ Duration limit reached ({args.duration}s). Exiting visual servo.")
+                node.get_logger().info(f"⏰ Duration limit reached ({args.duration}s). Exiting direct movement.")
                 break
                 
             rclpy.spin_once(node, timeout_sec=0.1)
     except KeyboardInterrupt:
-        node.get_logger().info("Visual servo stopped by user")
+        node.get_logger().info("Direct movement stopped by user")
     except Exception as e:
-        node.get_logger().error(f"Visual servo error: {e}")
+        node.get_logger().error(f"Direct movement error: {e}")
     finally:
         try:
             rclpy.shutdown()

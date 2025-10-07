@@ -113,3 +113,22 @@ def hover_over(target_pose, height, duration=3.0):
         # "traj0": move(target_position,null_rot,segment_duration), # hovers over target 
         "traj1": move(target_position,target_rot,segment_duration), # hovers over target, matching angle
     }
+
+def hover_over_grasp(target_pose, height, duration=3.0):
+    """
+    target_pose is (position, rpy), where position = [x, y, z] and only x, y are considered
+    duration: time in seconds for the movement
+    """
+    target_position = target_pose[0].copy() # copying positions
+    target_position[2] = height  # Set height to given value
+    fixed_roll = 0
+    fixed_pitch = 180
+    yaw = target_pose[1][2]
+    # null_rot = [0, 180, 0]
+    target_rot = [fixed_roll, fixed_pitch, yaw]
+    segment_duration = duration # use provided duration
+
+    return {
+        # "traj0": move(target_position,null_rot,segment_duration), # hovers over target 
+        "traj1": move(target_position,target_rot,segment_duration), # hovers over target, matching angle
+    }
