@@ -1,10 +1,12 @@
 from builtin_interfaces.msg import Duration
 from ur_asu.custom_libraries.ik_solver import compute_ik
 
-HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0]  # XYZRPY
+HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0]  # XYZRPY calibration offset x = -0.013 y = +0.028
 # HOME_POSE = [0.065, -0.385, 0.160, 0, 180, 0] #lower home pose
-PICK_STATION_POSE = [-0.180, -0.385, 0.481, 0, 180, 0]  # XYZRPY - Pick station position
-# PICK_STATION_POSE = [0.235, -0.664, 0.350, 0, 180, 0]
+# PICK_STATION_POSE = [-0.180, -0.385, 0.481, 0, 180, 0]  # XYZRPY - Pick station position
+PICK_STATION_POSE = [-0.330, -0.385, 0.404, 0, 180, 0] #calibration offset x = -0.000, y = +0.025
+
+
 
 def make_point(joint_positions, seconds):
     return {

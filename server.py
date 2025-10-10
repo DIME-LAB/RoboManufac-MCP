@@ -2578,6 +2578,215 @@ def move_to_safe_height(safe_height: float = 0.481) -> Dict[str, Any]:
         }
 
 @mcp.tool()
+def push_primitive(initial_x: float, initial_y: float, initial_z: float, initial_yaw: float,
+                  final_x: float, final_y: float, final_z: float, final_yaw: float,
+                  ee_height: float = 0.15, initial_offset: float = 0.05, 
+                  final_offset: float = -0.02351, stage_duration: float = 7.0):
+    """
+    Execute push primitive using predefined initial and final positions.
+    
+    IMPORTANT: You must provide ALL position values (initial and final x,y,z,yaw) as inputs.
+    Only the ee_height can be left as default (0.15m) or customized.
+    
+    Args:
+        initial_x: Initial X position in meters [REQUIRED]
+        initial_y: Initial Y position in meters [REQUIRED]
+        initial_z: Initial Z position in meters [REQUIRED]
+        initial_yaw: Initial yaw angle in degrees [REQUIRED]
+        final_x: Final X position in meters [REQUIRED]
+        final_y: Final Y position in meters [REQUIRED]
+        final_z: Final Z position in meters [REQUIRED]
+        final_yaw: Final yaw angle in degrees [REQUIRED]
+        ee_height: End-effector height during push (default: 0.15m) [OPTIONAL]
+        initial_offset: Distance before object to start push (default: 0.05m) [OPTIONAL]
+        final_offset: Distance before target to stop push (default: -0.02351m) [OPTIONAL]
+        stage_duration: Duration for each stage in seconds (default: 7.0s) [OPTIONAL]
+    
+    Returns:
+        Dictionary with execution status and results
+    """
+    try:
+        import subprocess
+        import sys
+        import os
+        
+        # Get the directory of the current script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        push_sim_path = os.path.join(script_dir, "primitives", "push_sim.py")
+        
+        # Build the command
+        cmd = [
+            sys.executable, push_sim_path,
+            "--initial-x", str(initial_x),
+            "--initial-y", str(initial_y), 
+            "--initial-z", str(initial_z),
+            "--initial-yaw", str(initial_yaw),
+            "--final-x", str(final_x),
+            "--final-y", str(final_y),
+            "--final-z", str(final_z),
+            "--final-yaw", str(final_yaw),
+            "--ee-height", str(ee_height),
+            "--initial-offset", str(initial_offset),
+            "--final-offset", str(final_offset),
+            "--stage-duration", str(stage_duration)
+        ]
+        
+        # Execute the push simulation with ROS2 environment (same pattern as visual_servo_yoloe)
+        # Build command with environment sourcing
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash", 
+            "export ROS_DOMAIN_ID=0",
+            f"cd {script_dir}/primitives",
+            f"timeout 60 /usr/bin/python3 push_sim.py --initial-x {initial_x} --initial-y {initial_y} --initial-z {initial_z} --initial-yaw {initial_yaw} --final-x {final_x} --final-y {final_y} --final-z {final_z} --final-yaw {final_yaw} --ee-height {ee_height} --initial-offset {initial_offset} --final-offset {final_offset} --stage-duration {stage_duration}"
+        ]
+        
+        cmd = "\n".join(cmd_parts)
+        
+        # Run with bash shell to source environment (same as visual_servo_yoloe)
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=70  # Add buffer for startup/shutdown
+        )
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "Push primitive executed successfully",
+                "output": result.stdout,
+                "parameters": {
+                    "initial_position": [initial_x, initial_y, initial_z],
+                    "initial_yaw": initial_yaw,
+                    "final_position": [final_x, final_y, final_z], 
+                    "final_yaw": final_yaw,
+                    "ee_height": ee_height,
+                    "initial_offset": initial_offset,
+                    "final_offset": final_offset,
+                    "stage_duration": stage_duration
+                }
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Push primitive failed with return code {result.returncode}",
+                "error": result.stderr,
+                "output": result.stdout
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error", 
+            "message": "Push primitive timed out after 60 seconds"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to execute push primitive: {str(e)}"
+        }
+
+@mcp.tool()
+def push_real(object_name: str = "jenga_4", final_x: float = 0.0, final_y: float = -0.5, 
+              final_z: float = 0.15, final_yaw: float = 0.0, ee_height: float = 0.15, 
+              initial_offset: float = 0.05, final_offset: float = -0.025, 
+              stage_duration: float = 5.0):
+    """
+    Execute push real primitive with automatic object detection and calibration offsets.
+    
+    This tool uses the push_real.py script which automatically detects object position
+    from the camera topic and includes calibration offsets for improved accuracy:
+    - X offset: -0.01m (-10mm correction, move left)
+    - Y offset: +0.03m (+30mm correction, move forward)
+    
+    The robot will automatically detect the object position and push it to the final position.
+    
+    Args:
+        object_name: Name of the object to detect and push (default: "jenga_4")
+        final_x: Final X position in meters (default: 0.0)
+        final_y: Final Y position in meters (default: -0.5)
+        final_z: Final Z position in meters (default: 0.15)
+        final_yaw: Final yaw angle in degrees (default: 0.0)
+        ee_height: End-effector height during push (default: 0.15m)
+        initial_offset: Distance before object to start push (default: 0.05m)
+        final_offset: Distance before target to stop push (default: -0.03m)
+        stage_duration: Duration for each stage in seconds (default: 5.0s)
+    
+    Returns:
+        Dictionary with execution status and results including calibration information
+    """
+    try:
+        import subprocess
+        import sys
+        import os
+        
+        # Get the directory of the current script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        push_real_path = os.path.join(script_dir, "primitives", "push_real.py")
+        
+        # Build command with environment sourcing (same pattern as visual_servo_yoloe)
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash", 
+            "export ROS_DOMAIN_ID=0",
+            f"cd {script_dir}/primitives",
+            f"timeout 60 /usr/bin/python3 push_real.py --object-name \"{object_name}\" --final-x {final_x} --final-y {final_y} --final-z {final_z} --final-yaw {final_yaw} --ee-height {ee_height} --initial-offset {initial_offset} --final-offset {final_offset} --stage-duration {stage_duration}"
+        ]
+        
+        cmd = "\n".join(cmd_parts)
+        
+        # Run with bash shell to source environment
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=70  # Add buffer for startup/shutdown
+        )
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "Push real primitive executed successfully with automatic object detection and calibration offsets",
+                "output": result.stdout,
+                "calibration_info": {
+                    "calibration_offset_x": -0.01,
+                    "calibration_offset_y": 0.03,
+                    "description": "Applied -10mm X offset (move left) and +30mm Y offset (move forward) for improved accuracy"
+                },
+                "parameters": {
+                    "object_name": object_name,
+                    "final_position": [final_x, final_y, final_z], 
+                    "final_yaw": final_yaw,
+                    "ee_height": ee_height,
+                    "initial_offset": initial_offset,
+                    "final_offset": final_offset,
+                    "stage_duration": stage_duration
+                }
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Push real primitive failed with return code {result.returncode}",
+                "error": result.stderr,
+                "output": result.stdout
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error", 
+            "message": "Push real primitive timed out after 60 seconds"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to execute push real primitive: {str(e)}"
+        }
+
+@mcp.tool()
 def close_connections():
     """
     Manually close WebSocket connections when needed.

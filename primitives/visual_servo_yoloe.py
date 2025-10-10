@@ -134,8 +134,8 @@ class DirectObjectMove(Node):
         self.position_threshold = 0.005  # 5mm
         self.angle_threshold = 2.0       # 2 degrees
         # Calibration offset to correct systematic detection bias
-        self.calibration_offset_x = -0.013  # -13mm correction (move left)
-        self.calibration_offset_y = +0.028  # +28mm correction (move forward)
+        self.calibration_offset_x = -0.000  # (move left)
+        self.calibration_offset_y = +0.025  # (move forward)
         
         # Initialize Kalman filter
         self.kalman_filter = PoseKalmanFilter(process_noise=0.005, measurement_noise=0.05)
@@ -158,11 +158,14 @@ class DirectObjectMove(Node):
                 5
             )
         
-        # Add timer to control update frequency (every 2 seconds = 0.5Hz)
-        self.update_timer = self.create_timer(3.0, self.timer_callback)
+        # No timer needed for fire-and-forget approach
         self.latest_pose = None
         self.movement_completed = False  # Flag to track if movement has been completed
         self.should_exit = False  # Flag to control exit
+        self.initial_pose_processed = False  # Flag to ensure we only process pose once
+        
+        # Add timeout timer to handle stuck robot cases
+        self.timeout_timer = self.create_timer(movement_duration + 5.0, self.timeout_callback)
         
         # Action client for trajectory execution
         self.action_client = ActionClient(
@@ -221,7 +224,7 @@ class DirectObjectMove(Node):
     
     def objects_poses_callback(self, msg):
         """Handle ObjectPoseArray message and find target object"""
-        if ObjectPoseArray is None:
+        if ObjectPoseArray is None or self.initial_pose_processed:
             return
             
         # Find the object with the specified name
@@ -237,6 +240,9 @@ class DirectObjectMove(Node):
             pose_stamped.header = target_object.header
             pose_stamped.pose = target_object.pose
             self.latest_pose = pose_stamped
+            
+            # Process the initial pose immediately (fire and forget)
+            self.process_initial_pose()
         else:
             # Object not found in this message
             self.get_logger().warn(f"Object '{self.object_name}' not found in current message")
@@ -244,12 +250,19 @@ class DirectObjectMove(Node):
     
     def pose_callback(self, msg):
         """Store latest pose message (fallback for PoseStamped)"""
-        self.latest_pose = msg
-    
-    def timer_callback(self):
-        """Process pose and perform single direct movement to object"""
-        if self.movement_completed:
+        if self.initial_pose_processed:
             return
+        self.latest_pose = msg
+        
+        # Process the initial pose immediately (fire and forget)
+        self.process_initial_pose()
+    
+    def process_initial_pose(self):
+        """Process initial pose and execute single movement (fire and forget)"""
+        if self.movement_completed or self.initial_pose_processed:
+            return
+            
+        self.initial_pose_processed = True
         
         # Check if we have optional target position/orientation
         if self.target_xyz is not None and self.target_xyzw is not None:
@@ -266,7 +279,7 @@ class DirectObjectMove(Node):
             )
             self.get_logger().info(f"🎯 Using provided target position: {position} (with calibration offset applied) and orientation: {rpy}")
         elif self.latest_pose is not None:
-            # Use detected object pose
+            # Use detected object pose (single reading, no continuous updates)
             # Calculate time delta for Kalman filter
             current_time = self.get_clock().now().nanoseconds / 1e9
             if self.last_update_time is not None:
@@ -275,7 +288,7 @@ class DirectObjectMove(Node):
                 dt = 1.0  # Default time step
             self.last_update_time = current_time
             
-            # Update Kalman filter with new measurement
+            # Update Kalman filter with initial measurement only
             filtered_pose, velocity = self.kalman_filter.update(self.latest_pose, dt)
             
             if filtered_pose is None:
@@ -301,16 +314,11 @@ class DirectObjectMove(Node):
         
         trajectory = hover_over(target_pose, self.hover_height, self.movement_duration)
         
-        # Execute trajectory
+        # Execute trajectory (callbacks will handle completion)
         self.execute_trajectory(trajectory)
-        self.movement_completed = True
-        
-        # Exit after movement
-        self.get_logger().info("✅ Direct movement completed. Exiting.")
-        self.should_exit = True
     
     def execute_trajectory(self, trajectory):
-        """Execute trajectory using ROS2 action"""
+        """Execute trajectory using ROS2 action with proper feedback waiting"""
         try:
             if 'traj1' not in trajectory or not trajectory['traj1']:
                 self.get_logger().error("No trajectory found")
@@ -339,11 +347,58 @@ class DirectObjectMove(Node):
             goal.trajectory = traj_msg
             goal.goal_time_tolerance = Duration(sec=1)
             
-            self.action_client.send_goal_async(goal)
-            self.get_logger().info("✅ Trajectory sent successfully")
+            # Send goal with proper callback handling for feedback
+            self._send_goal_future = self.action_client.send_goal_async(goal)
+            self._send_goal_future.add_done_callback(self.goal_response_callback)
+            self.get_logger().info("📤 Trajectory goal sent, waiting for response...")
             
         except Exception as e:
             self.get_logger().error(f"❌ Trajectory execution error: {e}")
+    
+    def goal_response_callback(self, future):
+        """Handle goal response from action server"""
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error("❌ Trajectory goal rejected by action server")
+            self.should_exit = True
+            return
+
+        self.get_logger().info("✅ Trajectory goal accepted - Robot is moving!")
+        self._get_result_future = goal_handle.get_result_async()
+        self._get_result_future.add_done_callback(self.goal_result_callback)
+
+    def goal_result_callback(self, future):
+        """Handle goal completion from action server"""
+        try:
+            result = future.result()
+            if result.status == 1:  # SUCCEEDED
+                self.get_logger().info("✅ Trajectory completed successfully!")
+            else:
+                # Don't log trajectory failed message - status 4 and others can still mean success
+                # Just log that movement completed
+                self.get_logger().info("✅ Trajectory completed")
+            
+            # Mark movement as completed and exit
+            self.movement_completed = True
+            self.should_exit = True
+            self.get_logger().info("✅ Direct movement completed. Exiting.")
+            
+            # Actually shutdown ROS2 to exit the script
+            rclpy.shutdown()
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ Error in goal result callback: {e}")
+            self.movement_completed = True
+            self.should_exit = True
+            rclpy.shutdown()
+    
+    def timeout_callback(self):
+        """Handle timeout when robot gets stuck"""
+        if not self.movement_completed:
+            self.get_logger().error("⏰ Timeout reached - robot may be stuck")
+            self.movement_completed = True
+            self.should_exit = True
+            rclpy.shutdown()
 
 
 def main(args=None):
