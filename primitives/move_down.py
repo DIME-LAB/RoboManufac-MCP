@@ -29,7 +29,7 @@ from ur_asu.custom_libraries.ik_solver import compute_ik
 # =============================================================================
 # CONFIGURABLE PARAMETERS - CHANGE THESE AS NEEDED
 # =============================================================================
-FORCE_Z_THRESHOLD = -5.0  # Force threshold in Z direction (Newtons, negative = downward force)
+FORCE_Z_THRESHOLD = -10.0  # Force threshold in Z direction (Newtons, negative = downward force)
 FINAL_Z_POSITION = 0.148  # Final Z position in meters
 MOVEMENT_DURATION = 5.0   # Duration for smooth movement in seconds
 FORCE_CHECK_INTERVAL = 0.02  # Check force every 20ms during movement - more responsive
