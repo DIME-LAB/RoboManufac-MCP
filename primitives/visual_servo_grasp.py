@@ -146,8 +146,8 @@ class DirectObjectMove(Node):
         self.position_threshold = 0.005  # 5mm
         self.angle_threshold = 2.0       # 2 degrees
         # Calibration offset to correct systematic detection bias
-        self.calibration_offset_x = -0.013  # -13mm correction (move left)
-        self.calibration_offset_y = +0.028  # +28mm correction (move forward)
+        self.calibration_offset_x = -0.014  # -0mm correction (move left)
+        self.calibration_offset_y = -0.008  # +0mm correction (move forward)
         
         # Initialize Kalman filter
         self.kalman_filter = PoseKalmanFilter(process_noise=0.005, measurement_noise=0.05)
@@ -324,25 +324,26 @@ class DirectObjectMove(Node):
             )
             self.get_logger().info(f"🎯 Using provided target position: {position} (with calibration offset applied) and orientation: {rpy}")
         elif self.selected_grasp_point is not None:
-            # Use grasp point position and approach vector
+            # Use grasp point position and orientation directly from the message
             position = [
-                self.selected_grasp_point.position.x,
-                self.selected_grasp_point.position.y,
-                self.selected_grasp_point.position.z
+                self.selected_grasp_point.pose.position.x,
+                self.selected_grasp_point.pose.position.y,
+                self.selected_grasp_point.pose.position.z
             ]
             
             # Apply calibration offset to correct systematic detection bias
             position[0] += self.calibration_offset_x  # Correct X offset
             position[1] += self.calibration_offset_y  # Correct Y offset
             
-            # Use approach vector to determine orientation
-            approach = self.selected_grasp_point.approach_vector
-            # Convert approach vector to RPY (simplified - assuming approach vector is the z-axis direction)
-            # For now, we'll use a default orientation and let the user specify if needed
-            rpy = [0, 180, 0]  # Default downward orientation
+            # Use the provided RPY values directly from the grasp point message
+            roll = self.selected_grasp_point.roll
+            pitch = self.selected_grasp_point.pitch
+            yaw = self.selected_grasp_point.yaw
+            
+            rpy = [roll, pitch, yaw]
             
             self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {position} (with calibration offset applied)")
-            self.get_logger().info(f"🎯 Approach vector: [{approach.x:.3f}, {approach.y:.3f}, {approach.z:.3f}]")
+            self.get_logger().info(f"🎯 Grasp point orientation (RPY): [{roll:.1f}, {pitch:.1f}, {yaw:.1f}] degrees")
         elif self.latest_pose is not None:
             # Use detected object pose
             # Calculate time delta for Kalman filter
