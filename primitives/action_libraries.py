@@ -1,5 +1,5 @@
 from builtin_interfaces.msg import Duration
-from ur_asu.custom_libraries.ik_solver import compute_ik
+from ik_solver import compute_ik, compute_ik_robust
 
 HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0]  # XYZRPY calibration offset x = -0.013 y = +0.028
 # HOME_POSE = [0.065, -0.385, 0.160, 0, 180, 0] #lower home pose
@@ -36,6 +36,34 @@ def move(position, rpy, seconds):
     if joint_angles is not None:
         return [make_point(joint_angles, seconds)]
     return []
+
+def move_robust(position, rpy, seconds):
+    """
+    Enhanced move function that can handle arbitrary orientations (not just [0, 180, yaw]).
+    Uses robust IK solver with multiple seed configurations.
+    
+    Args:
+        position: [x, y, z] target position
+        rpy: [roll, pitch, yaw] target orientation in degrees
+        seconds: duration for the movement
+        
+    Returns:
+        List of trajectory points if successful, empty list otherwise
+    """
+    if len(position) != 3:
+        raise ValueError(f"Expected 3D position, got {position}")
+    
+    print(f"move_robust: Attempting to reach position={position}, rpy={rpy}")
+    
+    # Try robust IK solver with multiple seeds
+    joint_angles = compute_ik_robust(position, rpy, max_tries=5, dx=0.001, multiple_seeds=True)
+    
+    if joint_angles is not None:
+        print(f"move_robust: IK successful!")
+        return [make_point(joint_angles, seconds)]
+    else:
+        print(f"move_robust: IK failed for position={position}, rpy={rpy}")
+        return []
 
 def moveZ(position, rpy, seconds):
     if len(position) != 3:
