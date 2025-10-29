@@ -136,24 +136,31 @@ class ReorientForAssembly(Node):
                 return np.array([rotation.get('x', 0), rotation.get('y', 0), rotation.get('z', 0)])
         return None
     
-    def reorient_for_target(self, object_name, execute_trajectory=False, duration=10.0, use_robust_ik=False):
+    def reorient_for_target(self, object_name, base_name, execute_trajectory=False, duration=10.0, use_robust_ik=False):
         """
         Calculate and execute EE reorientation to achieve target object orientation
+        
+        ONLY changes orientation, keeps current position!
+        Target orientation from JSON is relative to base frame.
         
         Algorithm:
         1. T_EE_current = current end-effector pose
         2. T_object_current = current object pose  
-        3. T_grasp = T_EE_current^(-1) * T_object_current  (how EE is holding the object)
-        4. R_object_target = target object orientation from JSON
-        5. T_EE_target = T_object_target * T_grasp^(-1)  (required EE pose)
+        3. T_base_current = current base pose
+        4. T_grasp = T_EE_current^(-1) * T_object_current  (how EE is holding the object)
+        5. Get target orientation from JSON (relative to base)
+        6. R_object_target_world = R_base_current * R_target_relative  (transform to world frame)
+        7. T_object_target = current object position + target orientation in world frame
+        8. T_EE_target = T_object_target * T_grasp^(-1)  (required EE pose)
         
         Args:
             object_name: Name of the object to reorient
+            base_name: Name of the base object
             execute_trajectory: If True, execute the calculated trajectory
             duration: Duration for trajectory execution
             use_robust_ik: If True, use robust IK solver with multiple seed configurations
         """
-        self.get_logger().info(f"Calculating reorientation for {object_name}")
+        self.get_logger().info(f"Calculating reorientation for {object_name} relative to {base_name}")
         
         if use_robust_ik:
             self.get_logger().info("Using ROBUST IK solver (can handle arbitrary orientations)")
@@ -173,27 +180,44 @@ class ReorientForAssembly(Node):
                 self.get_logger().error(f"Object {object_name} not found")
                 return None
         
+        # Check if base exists
+        if base_name not in self.current_poses:
+            base_name = f"{base_name}_scaled70"
+            if base_name not in self.current_poses:
+                self.get_logger().error(f"Base {base_name} not found")
+                return None
+        
         # Convert poses to matrices
         T_EE_current = self.pose_to_matrix(self.current_ee_pose.pose)
         T_object_current = self.transform_to_matrix(self.current_poses[object_name].transform)
+        T_base_current = self.transform_to_matrix(self.current_poses[base_name].transform)
         
         # Calculate grasp transformation
         T_grasp = np.linalg.inv(T_EE_current) @ T_object_current
         
-        # Debug: Log grasp transformation
+        # Get current positions
+        ee_current_position, ee_current_rpy = self.matrix_to_rpy(T_EE_current)
+        object_current_position, object_current_rpy = self.matrix_to_rpy(T_object_current)
+        base_current_position, base_current_rpy = self.matrix_to_rpy(T_base_current)
         grasp_position, grasp_rpy = self.matrix_to_rpy(T_grasp)
+        
         self.get_logger().info(f"DEBUG: Grasp transformation: Position={grasp_position} RPY={grasp_rpy}")
         
-        # Get target object orientation from JSON
-        target_euler = self.get_object_target_orientation(object_name)
-        if target_euler is None:
+        # Get target object orientation from JSON (relative to base frame)
+        target_euler_relative = self.get_object_target_orientation(object_name)
+        if target_euler_relative is None:
             self.get_logger().error(f"No target orientation found for {object_name}")
             return None
         
-        # Create target object transformation matrix (keep current position, change orientation)
-        R_object_target = R.from_euler('xyz', target_euler).as_matrix()
+        # Transform target orientation from base frame to world frame
+        # R_object_target_world = R_base_current * R_target_relative
+        R_base_current = T_base_current[:3, :3]
+        R_target_relative = R.from_euler('xyz', target_euler_relative).as_matrix()
+        R_object_target_world = R_base_current @ R_target_relative
+        
+        # Create target object transformation matrix (keep current position, apply world-frame orientation)
         T_object_target = np.eye(4)
-        T_object_target[:3, :3] = R_object_target
+        T_object_target[:3, :3] = R_object_target_world
         T_object_target[:3, 3] = T_object_current[:3, 3]  # Keep current object position
         
         # Calculate required EE pose
@@ -201,26 +225,22 @@ class ReorientForAssembly(Node):
         
         # Convert to position and RPY (already canonicalized by matrix_to_rpy)
         ee_target_position, ee_target_rpy = self.matrix_to_rpy(T_EE_target)
-        ee_current_position, ee_current_rpy = self.matrix_to_rpy(T_EE_current)
-        
-        # IMPORTANT: Ensure target is canonicalized before sending to IK solver
-        # The matrix_to_rpy already applies canonicalization, but let's verify
-        self.get_logger().info(f"DEBUG: Target EE RPY before sending to IK: {ee_target_rpy}")
-        
-        # Get object poses for logging
-        object_current_position, object_current_rpy = self.matrix_to_rpy(T_object_current)
         object_target_position, object_target_rpy = self.matrix_to_rpy(T_object_target)
+        
+        self.get_logger().info(f"DEBUG: Target EE RPY before sending to IK: {ee_target_rpy}")
         
         # Log the calculations
         self.get_logger().info("=" * 80)
         self.get_logger().info("REORIENTATION CALCULATION:")
         self.get_logger().info("")
         self.get_logger().info("CURRENT STATE:")
+        self.get_logger().info(f"  Current Base: Position={base_current_position} RPY={base_current_rpy}")
         self.get_logger().info(f"  Current EE: Position={ee_current_position} RPY={ee_current_rpy}")
         self.get_logger().info(f"  Current Object: Position={object_current_position} RPY={object_current_rpy}")
         self.get_logger().info("")
         self.get_logger().info("TARGET STATE:")
-        self.get_logger().info(f"  Target Object Orientation (from JSON): {np.degrees(target_euler)} degrees")
+        self.get_logger().info(f"  Target Object Orientation (from JSON, relative to base): {np.degrees(target_euler_relative)} degrees")
+        self.get_logger().info(f"  Target Object Orientation (world frame): RPY={object_target_rpy}")
         self.get_logger().info(f"  Target Object: Position={object_target_position} RPY={object_target_rpy}")
         self.get_logger().info(f"  Calculated Target EE: Position={ee_target_position} RPY={ee_target_rpy}")
         self.get_logger().info("=" * 80)
@@ -321,8 +341,9 @@ class ReorientForAssembly(Node):
 
 
 def main(args=None):
-    parser = argparse.ArgumentParser(description='Reorient for Assembly - Enhanced with Robust IK')
+    parser = argparse.ArgumentParser(description='Reorient for Assembly - ONLY changes orientation, keeps position')
     parser.add_argument('--object-name', type=str, required=True, help='Name of the object to reorient')
+    parser.add_argument('--base-name', type=str, required=True, help='Name of the base object (for orientation reference)')
     parser.add_argument('--duration', type=float, default=10.0, help='Movement duration in seconds')
     parser.add_argument('--execute', action='store_true', help='Execute trajectory')
     parser.add_argument('--robust-ik', action='store_true', help='Use robust IK solver (can handle arbitrary orientations)')
@@ -337,7 +358,7 @@ def main(args=None):
     
     try:
         # Wait for pose data
-        node.get_logger().info(f"Waiting for pose data for object: {args.object_name}")
+        node.get_logger().info(f"Waiting for pose data for object: {args.object_name} and base: {args.base_name}")
         max_wait_time = 10
         start_time = time.time()
         
@@ -353,16 +374,17 @@ def main(args=None):
         
         # Execute reorientation
         success = node.reorient_for_target(
-            args.object_name, 
+            args.object_name,
+            args.base_name,
             execute_trajectory=args.execute, 
             duration=args.duration,
             use_robust_ik=args.robust_ik
         )
         
         if success:
-            node.get_logger().info("✅ Reorientation successful!")
+            node.get_logger().info("Reorientation successful!")
         else:
-            node.get_logger().error("❌ Reorientation failed")
+            node.get_logger().error("Reorientation failed")
             
     except KeyboardInterrupt:
         node.get_logger().info("Interrupted by user")
