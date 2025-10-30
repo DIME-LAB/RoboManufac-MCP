@@ -206,8 +206,11 @@ class TranslateForAssembly(Node):
             self.get_logger().error(f"No target position found for {object_name}")
             return None
         
-        # Calculate absolute target object position (base position + relative position)
-        target_object_position_abs = base_current_position + target_position_relative
+        # Transform target position from base frame to world frame
+        # If base is rotated, we need to apply base rotation to relative position
+        # target_position_world = base_position + R_base @ target_position_relative
+        R_base_current = T_base_current[:3, :3]
+        target_object_position_abs = base_current_position + R_base_current @ target_position_relative
         
         # Create target object transformation (keep current orientation for now)
         T_object_target = np.eye(4)
