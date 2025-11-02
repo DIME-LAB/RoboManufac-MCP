@@ -1859,20 +1859,16 @@ def list_primitive_scripts():
         }
 
 @mcp.tool()
-def move_down(height: float = 0.148, position: list = None, orientation: list = None, quaternion: list = None):
+def move_down(height: float = None):
     """
     Execute the move_down.py primitive script.
-    This tool performs a two-step movement:
-    1. First moves to target X,Y position with specified orientation
-    2. Then moves down in Z-axis with force monitoring
+    This tool moves the robot down in Z-axis with gripper force monitoring.
+    The robot will stop when gripper force exceeds 60.
     
-    The robot will stop when either the force threshold is reached OR the target height is reached, whichever comes first.
+    Uses the same pose reading logic as move_to_safe_height.py.
     
     Args:
-        height: Target Z position in meters (default: 0.148)
-        position: Target position [x, y, z] in meters (optional, uses current position if not provided)
-        orientation: Target orientation [roll, pitch, yaw] in degrees (optional, uses [0, 180, 0] if not provided)
-        quaternion: Target orientation [x, y, z, w] quaternion (optional, overrides orientation if provided)
+        height: Target Z position in meters (optional, defaults to current height - 0.2m if not provided)
     
     Returns:
         Dictionary with execution status and results
@@ -1891,29 +1887,11 @@ def move_down(height: float = 0.148, position: list = None, orientation: list = 
                 "error": f"Move down script not found: {script_path}"
             }
         
-        # Build command with optional parameters
-        cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash", 
-            "export ROS_DOMAIN_ID=0",
-            "cd /home/aaugus11/Documents/ros-mcp-server/primitives",
-            f"/usr/bin/python3 move_down.py --height {height}"
-        ]
-        
-        # Build the python command with all parameters
-        python_cmd = f"/usr/bin/python3 move_down.py --height {height}"
-        
-        # Add position parameter if provided
-        if position and len(position) == 3:
-            python_cmd += f" --position {' '.join(map(str, position))}"
-        
-        # Add orientation parameter if provided  
-        if orientation and len(orientation) == 3:
-            python_cmd += f" --orientation {' '.join(map(str, orientation))}"
-        
-        # Add quaternion parameter if provided (overrides orientation)
-        if quaternion and len(quaternion) == 4:
-            python_cmd += f" --quaternion {' '.join(map(str, quaternion))}"
+        # Build the python command
+        if height is not None:
+            python_cmd = f"/usr/bin/python3 move_down.py --height {height}"
+        else:
+            python_cmd = "/usr/bin/python3 move_down.py"
         
         # Build final command
         cmd_parts = [
