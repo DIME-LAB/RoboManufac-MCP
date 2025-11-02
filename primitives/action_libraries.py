@@ -18,7 +18,7 @@ def make_point(joint_positions, seconds):
 def home():
     joint_angles = compute_ik(HOME_POSE[0:3], HOME_POSE[3:6])
     if joint_angles is not None:
-        return [make_point(joint_angles, 4)]
+        return [make_point(joint_angles, 10)]
     return []
 
 def pick():
