@@ -159,6 +159,13 @@ class ReorientForAssembly(Node):
             execute_trajectory: If True, execute the calculated trajectory
             duration: Duration for trajectory execution
             use_robust_ik: If True, use robust IK solver with multiple seed configurations
+        
+        Note:
+            The initial grasp relationship (relative rotation between gripper and object) is preserved.
+            The object's absolute orientation changes to match the target, but the way the object is held
+            relative to the gripper remains unchanged throughout the reorientation.
+            This shouldnt be the case ideally- need to fix this after fixing the physics of the object in arm simulation
+            and after fixing the real world object pose detection.
         """
         self.get_logger().info(f"Calculating reorientation for {object_name} relative to {base_name}")
         
