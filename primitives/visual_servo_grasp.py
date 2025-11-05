@@ -10,6 +10,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped
+from tf2_msgs.msg import TFMessage
+from geometry_msgs.msg import TransformStamped
 from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
@@ -17,6 +19,7 @@ import math
 import sys
 import argparse
 import numpy as np
+from scipy.spatial.transform import Rotation as R
 
 # Import from local action_libraries file
 from action_libraries import hover_over_grasp
@@ -131,7 +134,7 @@ class PoseKalmanFilter:
         return self.x[:6], self.x[6:12]
 
 class DirectObjectMove(Node):
-    def __init__(self, topic_name="/objects_poses", object_name="blue_dot_0", hover_height=0.15, movement_duration=7.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None):
+    def __init__(self, topic_name="/objects_poses_sim", object_name="blue_dot_0", hover_height=0.15, movement_duration=7.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None):
         super().__init__('direct_object_move')
         
         self.topic_name = topic_name
@@ -146,8 +149,8 @@ class DirectObjectMove(Node):
         self.position_threshold = 0.005  # 5mm
         self.angle_threshold = 2.0       # 2 degrees
         # Calibration offset to correct systematic detection bias
-        self.calibration_offset_x = -0.014  # -0mm correction (move left)
-        self.calibration_offset_y = -0.008  # +0mm correction (move forward)
+        self.calibration_offset_x = -0.0  # -0mm correction (move left)
+        self.calibration_offset_y = -0.0  # +0mm correction (move forward)
         
         # Initialize Kalman filter
         self.kalman_filter = PoseKalmanFilter(process_noise=0.005, measurement_noise=0.05)
@@ -158,21 +161,16 @@ class DirectObjectMove(Node):
         self.selected_grasp_point = None
         
         # Subscribe to object poses topic
-        if ObjectPoseArray is not None:
-            self.pose_sub = self.create_subscription(
-                ObjectPoseArray,
-                topic_name,
-                self.objects_poses_callback,
-                5  # Lower QoS to reduce update frequency
-            )
-        else:
-            # Fallback to old PoseStamped subscription
-            self.pose_sub = self.create_subscription(
-                PoseStamped,
-                topic_name,
-                self.pose_callback,
-                5
-            )
+        # Use TFMessage (for /objects_poses_real topic which publishes TFMessage)
+        self.pose_sub = self.create_subscription(
+            TFMessage,
+            topic_name,
+            self.tf_message_callback,
+            5  # Lower QoS to reduce update frequency
+        )
+        
+        # Note: ObjectPoseArray subscription removed - topic publishes TFMessage format
+        # If you need ObjectPoseArray support, use a different topic name
         
         # Subscribe to grasp points topic if grasp_id is provided
         if self.grasp_id is not None and GraspPointArray is not None:
@@ -274,6 +272,31 @@ class DirectObjectMove(Node):
         else:
             # Object not found in this message
             self.get_logger().warn(f"Object '{self.object_name}' not found in current message")
+            self.latest_pose = None
+    
+    def tf_message_callback(self, msg):
+        """Handle TFMessage and find target object by child_frame_id"""
+        # Find the transform with matching child_frame_id (object name)
+        target_transform = None
+        for transform in msg.transforms:
+            if transform.child_frame_id == self.object_name:
+                target_transform = transform
+                break
+        
+        if target_transform is not None:
+            # Convert TransformStamped to PoseStamped
+            pose_stamped = PoseStamped()
+            pose_stamped.header = target_transform.header
+            pose_stamped.pose.position.x = target_transform.transform.translation.x
+            pose_stamped.pose.position.y = target_transform.transform.translation.y
+            pose_stamped.pose.position.z = target_transform.transform.translation.z
+            pose_stamped.pose.orientation.x = target_transform.transform.rotation.x
+            pose_stamped.pose.orientation.y = target_transform.transform.rotation.y
+            pose_stamped.pose.orientation.z = target_transform.transform.rotation.z
+            pose_stamped.pose.orientation.w = target_transform.transform.rotation.w
+            self.latest_pose = pose_stamped
+        else:
+            # Object not found in this message
             self.latest_pose = None
     
     def pose_callback(self, msg):
@@ -418,17 +441,37 @@ class DirectObjectMove(Node):
             goal.trajectory = traj_msg
             goal.goal_time_tolerance = Duration(sec=1)
             
-            self.action_client.send_goal_async(goal)
-            self.get_logger().info("✅ Trajectory sent successfully")
+            self.get_logger().info("Sending trajectory...")
+            self._send_goal_future = self.action_client.send_goal_async(goal)
+            self._send_goal_future.add_done_callback(self.goal_response)
             
         except Exception as e:
             self.get_logger().error(f"❌ Trajectory execution error: {e}")
+
+    def goal_response(self, future):
+        """Handle goal response"""
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error("Trajectory goal rejected")
+            return
+
+        self.get_logger().info("Trajectory goal accepted")
+        self._get_result_future = goal_handle.get_result_async()
+        self._get_result_future.add_done_callback(self.goal_result)
+
+    def goal_result(self, future):
+        """Handle goal result"""
+        result = future.result()
+        if result.status == 4:  # SUCCEEDED
+            self.get_logger().info("✅ Trajectory completed successfully")
+        else:
+            self.get_logger().error(f"Trajectory failed with status: {result.status}")
 
 
 def main(args=None):
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Direct Object Movement Node')
-    parser.add_argument('--topic', type=str, default="/objects_poses", 
+    parser.add_argument('--topic', type=str, default="/objects_poses_real", 
                        help='Topic name for object poses subscription')
     parser.add_argument('--object-name', type=str, default="fork_orange_scaled70",
                        help='Name of the object to move to (e.g., blue_dot_0, red_dot_0)')
