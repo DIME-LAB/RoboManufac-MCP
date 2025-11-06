@@ -9,6 +9,7 @@ Supports grasp point selection from /grasp_points topic
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import PoseStamped
 from tf2_msgs.msg import TFMessage
 from geometry_msgs.msg import TransformStamped
@@ -134,12 +135,12 @@ class PoseKalmanFilter:
         return self.x[:6], self.x[6:12]
 
 class DirectObjectMove(Node):
-    def __init__(self, topic_name="/objects_poses_sim", object_name="blue_dot_0", hover_height=0.15, movement_duration=7.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None):
+    def __init__(self, topic_name="/objects_poses_sim", object_name="blue_dot_0", height=0.15, movement_duration=7.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None):
         super().__init__('direct_object_move')
         
         self.topic_name = topic_name
         self.object_name = object_name
-        self.hover_height = hover_height
+        self.height = height
         self.movement_duration = movement_duration  # Duration for IK movement
         self.target_xyz = target_xyz  # Optional target position [x, y, z]
         self.target_xyzw = target_xyzw  # Optional target orientation [x, y, z, w]
@@ -160,6 +161,10 @@ class DirectObjectMove(Node):
         self.latest_grasp_points = None
         self.selected_grasp_point = None
         
+        # Store current end-effector pose
+        self.current_ee_pose = None
+        self.ee_pose_received = False
+        
         # Subscribe to object poses topic
         # Use TFMessage (for /objects_poses_real topic which publishes TFMessage)
         self.pose_sub = self.create_subscription(
@@ -167,6 +172,19 @@ class DirectObjectMove(Node):
             topic_name,
             self.tf_message_callback,
             5  # Lower QoS to reduce update frequency
+        )
+        
+        # Subscribe to end-effector pose topic
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            depth=10
+        )
+        self.ee_pose_sub = self.create_subscription(
+            PoseStamped,
+            '/tcp_pose_broadcaster/pose',
+            self.ee_pose_callback,
+            qos_profile
         )
         
         # Note: ObjectPoseArray subscription removed - topic publishes TFMessage format
@@ -191,6 +209,7 @@ class DirectObjectMove(Node):
         self.latest_pose = None
         self.movement_completed = False  # Flag to track if movement has been completed
         self.should_exit = False  # Flag to control exit
+        self.trajectory_in_progress = False  # Flag to track if trajectory is executing
         
         # Action client for trajectory execution
         self.action_client = ActionClient(
@@ -200,7 +219,7 @@ class DirectObjectMove(Node):
         )
         
         self.get_logger().info(f"🤖 Direct object movement started for object '{object_name}' on topic {topic_name}")
-        self.get_logger().info(f"📏 Target height: {hover_height}m")
+        self.get_logger().info(f"📏 Target height: {height}m")
         self.get_logger().info(f"⏱️ Movement duration: {movement_duration}s")
         if self.grasp_id is not None:
             self.get_logger().info(f"🎯 Grasp point mode: Using grasp_id {grasp_id} from topic {grasp_points_topic}")
@@ -327,36 +346,58 @@ class DirectObjectMove(Node):
             self.get_logger().warn(f"Grasp point {self.grasp_id} for object '{self.object_name}' not found in current message")
             self.selected_grasp_point = None
     
+    def ee_pose_callback(self, msg: PoseStamped):
+        """Callback for end-effector pose data"""
+        self.current_ee_pose = msg
+        self.ee_pose_received = True
+    
     def timer_callback(self):
         """Process pose and perform single direct movement to object"""
         if self.movement_completed:
             return
         
+        # Don't send new trajectory if one is already in progress
+        if self.trajectory_in_progress:
+            self.get_logger().debug("Trajectory already in progress, skipping...")
+            return
+        
+        # Wait for end-effector pose if not received yet
+        if not self.ee_pose_received or self.current_ee_pose is None:
+            self.get_logger().warn("Waiting for end-effector pose...")
+            return
+        
+        # Get current end-effector position
+        current_ee_position = np.array([
+            self.current_ee_pose.pose.position.x,
+            self.current_ee_pose.pose.position.y,
+            self.current_ee_pose.pose.position.z
+        ])
+        
         # Check if we have optional target position/orientation
         if self.target_xyz is not None and self.target_xyzw is not None:
             # Use provided target position and orientation
-            position = self.target_xyz[:3].copy()  # Take first 3 elements and make a copy
+            object_position = np.array(self.target_xyz[:3])  # Take first 3 elements
             
             # Apply calibration offset to correct systematic detection bias (same as detected objects)
-            position[0] += self.calibration_offset_x  # Correct X offset
-            position[1] += self.calibration_offset_y  # Correct Y offset
+            object_position[0] += self.calibration_offset_x  # Correct X offset
+            object_position[1] += self.calibration_offset_y  # Correct Y offset
             
             rpy = self.quaternion_to_rpy(
                 self.target_xyzw[0], self.target_xyzw[1], 
                 self.target_xyzw[2], self.target_xyzw[3]
             )
-            self.get_logger().info(f"🎯 Using provided target position: {position} (with calibration offset applied) and orientation: {rpy}")
+            self.get_logger().info(f"🎯 Using provided target position: {object_position} (with calibration offset applied) and orientation: {rpy}")
         elif self.selected_grasp_point is not None:
             # Use grasp point position and orientation directly from the message
-            position = [
+            object_position = np.array([
                 self.selected_grasp_point.pose.position.x,
                 self.selected_grasp_point.pose.position.y,
                 self.selected_grasp_point.pose.position.z
-            ]
+            ])
             
             # Apply calibration offset to correct systematic detection bias
-            position[0] += self.calibration_offset_x  # Correct X offset
-            position[1] += self.calibration_offset_y  # Correct Y offset
+            object_position[0] += self.calibration_offset_x  # Correct X offset
+            object_position[1] += self.calibration_offset_y  # Correct Y offset
             
             # Use the provided RPY values directly from the grasp point message
             roll = self.selected_grasp_point.roll
@@ -365,7 +406,7 @@ class DirectObjectMove(Node):
             
             rpy = [roll, pitch, yaw]
             
-            self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {position} (with calibration offset applied)")
+            self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {object_position} (with calibration offset applied)")
             self.get_logger().info(f"🎯 Grasp point orientation (RPY): [{roll:.1f}, {pitch:.1f}, {yaw:.1f}] degrees")
         elif self.latest_pose is not None:
             # Use detected object pose
@@ -384,32 +425,69 @@ class DirectObjectMove(Node):
                 return
                 
             # Extract filtered position and orientation
-            position = filtered_pose[:3].tolist()
+            object_position = np.array(filtered_pose[:3])
             rpy = filtered_pose[3:6].tolist()
             
             # Apply calibration offset to correct systematic detection bias
-            position[0] += self.calibration_offset_x  # Correct X offset
-            position[1] += self.calibration_offset_y  # Correct Y offset
+            object_position[0] += self.calibration_offset_x  # Correct X offset
+            object_position[1] += self.calibration_offset_y  # Correct Y offset
             
-            self.get_logger().info(f"🎯 Moving to detected object at ({position[0]:.3f}, {position[1]:.3f}) at height {self.hover_height:.3f}m")
+            self.get_logger().info(f"🎯 Detected object at ({object_position[0]:.3f}, {object_position[1]:.3f}, {object_position[2]:.3f})")
         else:
             # No target provided and no object detected
             self.get_logger().warn("No target position provided and no object detected")
             return
         
-        # Create target pose at final height
-        target_position = [position[0], position[1], self.hover_height]
+        # Calculate direction vector from object to current end-effector
+        direction_vector = current_ee_position - object_position
+        current_distance = np.linalg.norm(direction_vector)
+        
+        self.get_logger().info(f"📏 Current distance between object and EE: {current_distance*100:.2f} cm")
+        self.get_logger().info(f"📍 Current EE position: ({current_ee_position[0]:.3f}, {current_ee_position[1]:.3f}, {current_ee_position[2]:.3f})")
+        self.get_logger().info(f"📍 Object position: ({object_position[0]:.3f}, {object_position[1]:.3f}, {object_position[2]:.3f})")
+        
+        # Check if height is explicitly specified
+        if self.height is not None:
+            # When height is specified, use it directly without distance constraints
+            # Maintain x-y position (directly above/below object)
+            target_ee_position = np.array([
+                object_position[0],
+                object_position[1],
+                self.height
+            ])
+            self.get_logger().info(f"📏 Using specified height={self.height:.3f}m (no distance constraint)")
+        else:
+            # When height is not specified, calculate target position to maintain 5.5cm (0.055m) distance
+            target_distance = 0.055  # 5.5 cm in meters
+            
+            if current_distance > 1e-6:  # Avoid division by zero
+                # Normalize direction vector and scale to target distance
+                normalized_direction = direction_vector / current_distance
+                target_ee_position = object_position + normalized_direction * target_distance
+            else:
+                # If current distance is very small, use a default direction (upward in z)
+                self.get_logger().warn("Current distance is very small, using default upward direction")
+                target_ee_position = object_position + np.array([0.0, 0.0, target_distance])
+            
+            self.get_logger().info(f"🎯 Target EE position (5.5cm from object): ({target_ee_position[0]:.3f}, {target_ee_position[1]:.3f}, {target_ee_position[2]:.3f})")
+            
+            # Verify the target distance
+            calculated_distance = np.linalg.norm(target_ee_position - object_position)
+            self.get_logger().info(f"✅ Calculated target distance: {calculated_distance*100:.2f} cm")
+        
+        self.get_logger().info(f"🎯 Final target EE position: ({target_ee_position[0]:.3f}, {target_ee_position[1]:.3f}, {target_ee_position[2]:.3f})")
+        
+        # Create target pose with calculated position
+        target_position = target_ee_position.tolist()
         target_pose = (target_position, rpy)
         
-        trajectory = hover_over_grasp(target_pose, self.hover_height, self.movement_duration)
+        # Use the calculated z-coordinate (which is either the specified height or the auto-calculated one)
+        trajectory = hover_over_grasp(target_pose, target_ee_position[2], self.movement_duration)
         
         # Execute trajectory
+        self.trajectory_in_progress = True  # Mark trajectory as in progress
         self.execute_trajectory(trajectory)
-        self.movement_completed = True
-        
-        # Exit after movement
-        self.get_logger().info("✅ Direct movement completed. Exiting.")
-        self.should_exit = True
+        # Don't set movement_completed or should_exit here - wait for trajectory completion
     
     def execute_trajectory(self, trajectory):
         """Execute trajectory using ROS2 action"""
@@ -447,12 +525,19 @@ class DirectObjectMove(Node):
             
         except Exception as e:
             self.get_logger().error(f"❌ Trajectory execution error: {e}")
+            self.trajectory_in_progress = False  # Clear flag on error
+            self.movement_completed = True
+            self.should_exit = True
 
     def goal_response(self, future):
         """Handle goal response"""
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().error("Trajectory goal rejected")
+            # Set exit flags if goal is rejected
+            self.trajectory_in_progress = False
+            self.movement_completed = True
+            self.should_exit = True
             return
 
         self.get_logger().info("Trajectory goal accepted")
@@ -462,10 +547,17 @@ class DirectObjectMove(Node):
     def goal_result(self, future):
         """Handle goal result"""
         result = future.result()
+        self.trajectory_in_progress = False  # Clear trajectory in progress flag
+        
         if result.status == 4:  # SUCCEEDED
             self.get_logger().info("✅ Trajectory completed successfully")
         else:
             self.get_logger().error(f"Trajectory failed with status: {result.status}")
+        
+        # Set exit flags after trajectory completes
+        self.movement_completed = True
+        self.should_exit = True
+        self.get_logger().info("✅ Direct movement completed. Exiting.")
 
 
 def main(args=None):
@@ -498,7 +590,7 @@ def main(args=None):
     
     rclpy.init(args=None)
     node = DirectObjectMove(topic_name=args.topic, object_name=args.object_name, 
-                      hover_height=args.height, movement_duration=args.movement_duration,
+                      height=args.height, movement_duration=args.movement_duration,
                       target_xyz=args.target_xyz, target_xyzw=args.target_xyzw,
                       grasp_points_topic=args.grasp_points_topic, grasp_id=args.grasp_id)
     
