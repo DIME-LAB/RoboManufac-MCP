@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Move Down Primitive for UR5e - ROS2 Version
-Moves robot down in Z-axis with gripper force monitoring.
-Stops when gripper force exceeds 60.
+Moves robot down in Z-axis with force monitoring on all three axes (X, Y, Z).
+Stops when any axis force exceeds -10N (like in simulation).
+Supports both simulation and real robot modes via --mode argument.
 """
 
 import rclpy
@@ -12,7 +13,7 @@ from rclpy.action import ActionClient
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 from std_msgs.msg import Float64
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, WrenchStamped
 from sensor_msgs.msg import JointState
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 import numpy as np
@@ -22,6 +23,7 @@ import re
 import json
 import yaml
 import argparse
+import threading
 
 # Add custom libraries to Python path
 custom_lib_path = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries"
@@ -48,18 +50,22 @@ except ImportError:
 # =============================================================================
 # CONFIGURABLE PARAMETERS
 # =============================================================================
-GRIPPER_FORCE_THRESHOLD = 100.0  # Stop when gripper force exceeds this value
+GRIPPER_FORCE_THRESHOLD = 100.0  # Stop when gripper force exceeds this value (for sim mode)
+FORCE_THRESHOLD = -20.0  # Stop when any axis force exceeds (is less than) -10N (for real mode)
 MOVEMENT_DURATION = 15.0  # Duration for smooth movement in seconds
 FORCE_CHECK_INTERVAL = 0.02  # Check force every 20ms during movement
 # =============================================================================
 
 class MoveDown(Node):
-    def __init__(self, target_height=None):
+    def __init__(self, target_height=None, mode='real'):
         super().__init__('move_down')
         self.joint_names = [
             "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
             "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"
         ]
+        
+        # Mode: 'sim' or 'real'
+        self.mode = mode
         
         # Action client for trajectory control
         self.action_client = ActionClient(
@@ -71,8 +77,15 @@ class MoveDown(Node):
         # Target height (if None, will use current height - 0.2m as default)
         self.target_height = target_height
         
-        # Current gripper force reading
-        self.current_gripper_force = 0.0
+        # Force monitoring - different for sim vs real
+        if self.mode == 'sim':
+            # Sim mode: gripper force (single value)
+            self.current_gripper_force = 0.0
+        else:
+            # Real mode: force readings for all three axes
+            self.current_force_x = 0.0
+            self.current_force_y = 0.0
+            self.current_force_z = 0.0
         self.force_threshold_reached = False
         
         # Current goal handle for cancellation
@@ -93,13 +106,25 @@ class MoveDown(Node):
         self.current_joint_angles = None
         self.joint_angles_received = False
         
-        # Subscriber for gripper force data
-        self.gripper_force_sub = self.create_subscription(
-            Float64,
-            '/gripper_force',
-            self.gripper_force_callback,
-            10
-        )
+        # Subscriber for force/torque data - use different topics and message types for sim vs real
+        if self.mode == 'sim':
+            # Simulation mode: use gripper force topic (Float64)
+            self.gripper_force_sub = self.create_subscription(
+                Float64,
+                '/gripper_force',
+                self.gripper_force_callback,
+                10
+            )
+            self.get_logger().info(f"Using mode: {self.mode}, gripper force topic: /gripper_force")
+        else:
+            # Real mode: use force/torque sensor topic (WrenchStamped)
+            self.force_sub = self.create_subscription(
+                WrenchStamped,
+                '/force_torque_sensor_broadcaster/wrench',
+                self.force_callback,
+                10
+            )
+            self.get_logger().info(f"Using mode: {self.mode}, force/torque topic: /force_torque_sensor_broadcaster/wrench")
         
         # Subscriber for EE pose data (using same QoS as get_ee_pose.py)
         qos_profile = QoSProfile(
@@ -235,7 +260,7 @@ class MoveDown(Node):
         }
 
     def gripper_force_callback(self, msg: Float64):
-        """Callback for gripper force data"""
+        """Callback for gripper force data (sim mode)"""
         self.current_gripper_force = msg.data
         
         # Check if force threshold is exceeded
@@ -243,12 +268,37 @@ class MoveDown(Node):
             self.get_logger().warn(f"Gripper force threshold reached! Force: {self.current_gripper_force:.2f} (threshold: {GRIPPER_FORCE_THRESHOLD})")
             self.force_threshold_reached = True
             self.emergency_stop()
+    
+    def force_callback(self, msg: WrenchStamped):
+        """Callback for force/torque sensor data - monitors all three axes (real mode)"""
+        # Extract force components for all three axes
+        self.current_force_x = msg.wrench.force.x
+        self.current_force_y = msg.wrench.force.y
+        self.current_force_z = msg.wrench.force.z
+        
+        # Check if any axis force exceeds threshold (is less than -10N)
+        if not self.force_threshold_reached:
+            if self.current_force_x <= FORCE_THRESHOLD:
+                self.get_logger().warn(f"Force threshold reached on X axis! Force: {self.current_force_x:.2f}N (threshold: {FORCE_THRESHOLD}N)")
+                self.force_threshold_reached = True
+                self.emergency_stop()
+            elif self.current_force_y <= FORCE_THRESHOLD:
+                self.get_logger().warn(f"Force threshold reached on Y axis! Force: {self.current_force_y:.2f}N (threshold: {FORCE_THRESHOLD}N)")
+                self.force_threshold_reached = True
+                self.emergency_stop()
+            elif self.current_force_z <= FORCE_THRESHOLD:
+                self.get_logger().warn(f"Force threshold reached on Z axis! Force: {self.current_force_z:.2f}N (threshold: {FORCE_THRESHOLD}N)")
+                self.force_threshold_reached = True
+                self.emergency_stop()
 
     def start_force_monitoring(self):
-        """Start monitoring gripper force during trajectory execution"""
+        """Start monitoring force during trajectory execution"""
         if self.force_monitor_timer is None:
             self.force_monitor_timer = self.create_timer(FORCE_CHECK_INTERVAL, self.check_force_during_execution)
-            self.get_logger().info("Started gripper force monitoring during execution")
+            if self.mode == 'sim':
+                self.get_logger().info("Started gripper force monitoring during execution")
+            else:
+                self.get_logger().info("Started force monitoring during execution (all axes)")
 
     def stop_force_monitoring(self):
         """Stop force monitoring"""
@@ -258,22 +308,41 @@ class MoveDown(Node):
             self.get_logger().info("Stopped force monitoring")
 
     def check_force_during_execution(self):
-        """Check gripper force during trajectory execution and cancel if threshold exceeded"""
-        if self.moving and self.current_gripper_force > GRIPPER_FORCE_THRESHOLD:
-            self.get_logger().error(f"EMERGENCY STOP: Gripper force threshold exceeded during movement! Force: {self.current_gripper_force:.2f}")
-            self.force_threshold_reached = True
-            self.emergency_stop()
-        elif self.moving:
-            # Debug: log force values during movement
-            self.get_logger().debug(f"Force monitoring: Gripper force = {self.current_gripper_force:.2f} (threshold: {GRIPPER_FORCE_THRESHOLD})")
-
-    def emergency_stop(self):
-        """Emergency stop - cancel current trajectory and stop immediately"""
+        """Check force during trajectory execution and cancel if threshold exceeded"""
         if not self.moving:
             return
-            
+        
+        if self.mode == 'sim':
+            # Sim mode: check gripper force
+            if self.current_gripper_force > GRIPPER_FORCE_THRESHOLD:
+                self.get_logger().error(f"EMERGENCY STOP: Gripper force threshold exceeded during movement! Force: {self.current_gripper_force:.2f}")
+                self.force_threshold_reached = True
+                self.emergency_stop()
+            else:
+                # Debug: log force values during movement
+                self.get_logger().debug(f"Force monitoring: Gripper force = {self.current_gripper_force:.2f} (threshold: {GRIPPER_FORCE_THRESHOLD})")
+        else:
+            # Real mode: check all three axes
+            if self.current_force_x <= FORCE_THRESHOLD:
+                self.get_logger().error(f"EMERGENCY STOP: Force threshold exceeded on X axis during movement! Force: {self.current_force_x:.2f}N")
+                self.force_threshold_reached = True
+                self.emergency_stop()
+            elif self.current_force_y <= FORCE_THRESHOLD:
+                self.get_logger().error(f"EMERGENCY STOP: Force threshold exceeded on Y axis during movement! Force: {self.current_force_y:.2f}N")
+                self.force_threshold_reached = True
+                self.emergency_stop()
+            elif self.current_force_z <= FORCE_THRESHOLD:
+                self.get_logger().error(f"EMERGENCY STOP: Force threshold exceeded on Z axis during movement! Force: {self.current_force_z:.2f}N")
+                self.force_threshold_reached = True
+                self.emergency_stop()
+            else:
+                # Debug: log force values during movement
+                self.get_logger().debug(f"Force monitoring: X={self.current_force_x:.2f}N, Y={self.current_force_y:.2f}N, Z={self.current_force_z:.2f}N (threshold: {FORCE_THRESHOLD}N)")
+
+    def emergency_stop(self):
+        """Emergency stop - cancel current trajectory and stop immediately, then exit"""
         self.moving = False
-        self.get_logger().error("EMERGENCY STOP: Cancelling current trajectory")
+        self.get_logger().error("EMERGENCY STOP: Force threshold exceeded. Exiting...")
         
         # Stop force monitoring
         self.stop_force_monitoring()
@@ -285,6 +354,20 @@ class MoveDown(Node):
                 self.get_logger().info("Trajectory cancellation requested")
             except Exception as e:
                 self.get_logger().error(f"Failed to cancel trajectory: {e}")
+        
+        # Force immediate exit - use a timer to shutdown after brief delay to allow logging
+        def delayed_shutdown():
+            try:
+                rclpy.shutdown()
+            except:
+                pass
+            # Force exit if rclpy.shutdown() doesn't work
+            os._exit(0)
+        
+        # Start shutdown in a separate thread after 100ms to allow log messages to flush
+        shutdown_timer = threading.Timer(0.1, delayed_shutdown)
+        shutdown_timer.daemon = True
+        shutdown_timer.start()
 
     def move_down(self):
         """Move down while maintaining current position and orientation"""
@@ -331,7 +414,10 @@ class MoveDown(Node):
             self.get_logger().info(f"Using default: moving down 0.2m to {target_position[2]:.3f}m")
         
         self.get_logger().info(f"Target position: {target_position}")
-        self.get_logger().info(f"Gripper force threshold: {GRIPPER_FORCE_THRESHOLD}")
+        if self.mode == 'sim':
+            self.get_logger().info(f"Gripper force threshold: {GRIPPER_FORCE_THRESHOLD}")
+        else:
+            self.get_logger().info(f"Force threshold: {FORCE_THRESHOLD}N (any axis)")
 
         # Compute inverse kinematics for target pose
         # Use quaternion directly converted to rotation matrix for more accurate orientation preservation
@@ -464,7 +550,10 @@ class MoveDown(Node):
             return
 
         self._current_goal_handle = goal_handle
-        self.get_logger().info("Move down trajectory accepted. Monitoring gripper force...")
+        if self.mode == 'sim':
+            self.get_logger().info("Move down trajectory accepted. Monitoring gripper force...")
+        else:
+            self.get_logger().info("Move down trajectory accepted. Monitoring force on all axes...")
         
         self._get_result_future = goal_handle.get_result_async()
         self._get_result_future.add_done_callback(self.goal_result)
@@ -479,17 +568,17 @@ class MoveDown(Node):
             
             if result.status == 1:  # SUCCEEDED
                 if self.force_threshold_reached:
-                    self.get_logger().info("Movement completed: Gripper force threshold reached")
+                    self.get_logger().info("Movement completed: Force threshold reached on one or more axes")
                 else:
                     self.get_logger().info("Movement completed successfully")
             elif result.status == 5:  # PREEMPTED (cancelled)
-                self.get_logger().info("Trajectory was preempted (likely due to gripper force threshold)")
+                self.get_logger().info("Trajectory was preempted (likely due to force threshold)")
                 if self.force_threshold_reached:
-                    self.get_logger().info("Gripper force threshold reached. Movement stopped.")
+                    self.get_logger().info("Force threshold reached. Movement stopped.")
             elif result.status == 4:  # ABORTED
                 self.get_logger().warn("Trajectory was aborted by controller")
                 if self.force_threshold_reached:
-                    self.get_logger().info("Gripper force threshold reached. Movement stopped.")
+                    self.get_logger().info("Force threshold reached. Movement stopped.")
             else:
                 self.get_logger().error(f"Trajectory failed with status: {result.status}")
                 
@@ -501,17 +590,20 @@ class MoveDown(Node):
             rclpy.shutdown()
 
 def main(args=None):
-    parser = argparse.ArgumentParser(description='Move Down Primitive with gripper force monitoring')
+    parser = argparse.ArgumentParser(description='Move Down Primitive with force monitoring on all axes')
     parser.add_argument('--height', type=float, default=None,
                        help='Target height in meters (optional, defaults to current height - 0.2m if not provided)')
+    parser.add_argument('--mode', type=str, default='real', choices=['sim', 'real'],
+                       help='Mode: "sim" for simulation, "real" for real robot (default: real)')
     
     # Parse known args to avoid conflicts with ROS2
     known_args, unknown_args = parser.parse_known_args()
     
     rclpy.init(args=args)
-    node = MoveDown(known_args.height)
+    node = MoveDown(known_args.height, known_args.mode)
     
     try:
+        # Use regular spin() like move_down_yoloe.py - rclpy.shutdown() will cause spin to exit
         rclpy.spin(node)
     except KeyboardInterrupt:
         node.get_logger().info("Move down interrupted by user")
