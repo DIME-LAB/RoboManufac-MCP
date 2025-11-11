@@ -634,20 +634,24 @@ def main(args=None):
     node.get_logger().info("Action server available!")
     
     try:
-        # Wait for pose data
+        # Wait for pose data (wait indefinitely until received)
         node.get_logger().info(f"Waiting for pose data for object: {args.object_name} and base: {args.base_name}")
-        max_wait_time = 10
         start_time = time.time()
+        last_log_time = start_time
         
-        while (not node.current_poses or node.current_ee_pose is None) and (time.time() - start_time) < max_wait_time:
+        while not node.current_poses or node.current_ee_pose is None:
             rclpy.spin_once(node, timeout_sec=0.1)
             time.sleep(0.1)
+            
+            # Log every 5 seconds to show we're still waiting
+            current_time = time.time()
+            if current_time - last_log_time >= 5.0:
+                elapsed = current_time - start_time
+                node.get_logger().info(f"Still waiting for pose data... ({elapsed:.1f}s elapsed)")
+                last_log_time = current_time
         
-        if not node.current_poses or node.current_ee_pose is None:
-            node.get_logger().error("No pose data received")
-            return
-        
-        node.get_logger().info(f"Received pose data for {len(node.current_poses)} objects")
+        elapsed = time.time() - start_time
+        node.get_logger().info(f"Received pose data for {len(node.current_poses)} objects (waited {elapsed:.1f}s)")
         
         # Execute translation
         success = node.translate_for_target(
@@ -660,11 +664,22 @@ def main(args=None):
             node.get_logger().info("Translation successful!")
         else:
             node.get_logger().error("Translation failed")
+        
+        # Exit with appropriate code
+        node.destroy_node()
+        rclpy.shutdown()
+        sys.exit(0 if success else 1)
             
     except KeyboardInterrupt:
         node.get_logger().info("Interrupted by user")
-    finally:
+        node.destroy_node()
         rclpy.shutdown()
+        sys.exit(1)
+    except Exception as e:
+        node.get_logger().error(f"Error: {e}")
+        node.destroy_node()
+        rclpy.shutdown()
+        sys.exit(1)
 
 
 if __name__ == '__main__':
