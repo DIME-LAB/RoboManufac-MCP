@@ -72,6 +72,10 @@ class ReorientForAssembly(Node):
         self.current_joint_angles = None
         self.joint_angles_received = False
         
+        # Trajectory execution state
+        self.trajectory_success = False
+        self.trajectory_completed = False
+        
         # Action client for trajectory execution
         self.joint_names = [
             "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
@@ -364,7 +368,7 @@ class ReorientForAssembly(Node):
         self.get_logger().error("IK failed: couldn't find solution even with multiple seeds")
         return None
     
-    def reorient_for_target(self, object_name, base_name, duration=10.0):
+    def reorient_for_target(self, object_name, base_name, duration=15.0):
         """
         Calculate and execute EE reorientation to achieve target object orientation
         
@@ -548,7 +552,7 @@ class ReorientForAssembly(Node):
         return success
     
     def execute_trajectory(self, trajectory):
-        """Execute trajectory and wait for completion"""
+        """Execute trajectory using callbacks (like move_home.py)"""
         try:
             if 'traj1' not in trajectory or not trajectory['traj1']:
                 return False
@@ -570,35 +574,55 @@ class ReorientForAssembly(Node):
             goal.trajectory = traj_msg
             goal.goal_time_tolerance = Duration(sec=1)
             
-            future = self.action_client.send_goal_async(goal)
-            rclpy.spin_until_future_complete(self, future)
-            goal_handle = future.result()
+            # Reset completion flags
+            self.trajectory_completed = False
+            self.trajectory_success = False
             
-            if not goal_handle.accepted:
-                self.get_logger().error("❌ Trajectory goal rejected")
-                return False
+            # Send goal with callback
+            self._send_goal_future = self.action_client.send_goal_async(goal)
+            self._send_goal_future.add_done_callback(self.goal_response_callback)
+            self.get_logger().info("Executing trajectory...")
             
-            self.get_logger().info("✅ Trajectory goal accepted, waiting for completion...")
-            result_future = goal_handle.get_result_async()
-            rclpy.spin_until_future_complete(self, result_future)
-            result = result_future.result()
+            # Wait for completion by spinning
+            while rclpy.ok() and not self.trajectory_completed:
+                rclpy.spin_once(self, timeout_sec=0.1)
             
-            if result.status == 4:  # SUCCEEDED
-                self.get_logger().info("✅ Trajectory completed successfully")
-                return True
-            else:
-                self.get_logger().error(f"❌ Trajectory failed with status: {result.status}")
-                return False
+            return self.trajectory_success
         except Exception as e:
             self.get_logger().error(f"❌ Trajectory execution error: {e}")
+            self.trajectory_completed = True
             return False
+    
+    def goal_response_callback(self, future):
+        """Handle goal response from action server"""
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error("❌ Trajectory goal rejected")
+            self.trajectory_completed = True
+            self.trajectory_success = False
+            return
+        
+        self.get_logger().info("✅ Trajectory goal accepted, waiting for completion...")
+        self._get_result_future = goal_handle.get_result_async()
+        self._get_result_future.add_done_callback(self.goal_result_callback)
+    
+    def goal_result_callback(self, future):
+        """Handle goal result from action server"""
+        result = future.result()
+        if result.status == 4:  # SUCCEEDED
+            self.get_logger().info("✅ Trajectory completed successfully")
+            self.trajectory_success = True
+        else:
+            self.get_logger().error(f"❌ Trajectory failed with status: {result.status}")
+            self.trajectory_success = False
+        self.trajectory_completed = True
 
 
 def main(args=None):
     parser = argparse.ArgumentParser(description='Reorient for Assembly - ONLY changes orientation, keeps position')
     parser.add_argument('--object-name', type=str, required=True, help='Name of the object to reorient')
     parser.add_argument('--base-name', type=str, required=True, help='Name of the base object (for orientation reference)')
-    parser.add_argument('--duration', type=float, default=10.0, help='Movement duration in seconds')
+    parser.add_argument('--duration', type=float, default=15.0, help='Movement duration in seconds')
     args = parser.parse_args()
     
     rclpy.init()
@@ -635,10 +659,14 @@ def main(args=None):
             node.get_logger().info("Reorientation successful!")
         else:
             node.get_logger().error("Reorientation failed")
+        
+        # Keep spinning briefly to allow any final callbacks/logging
+        time.sleep(0.5)
             
     except KeyboardInterrupt:
         node.get_logger().info("Interrupted by user")
     finally:
+        node.destroy_node()
         rclpy.shutdown()
 
 
