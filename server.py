@@ -623,132 +623,6 @@ def get_ee_pose(joint_angles: List[float] = None,
         }
 
 @mcp.tool()
-def control_gripper(command: str) -> Dict[str, Any]:
-    """
-    Control gripper with flexible input commands using ROS2.
-    
-    Args:
-        command: Gripper control command. Can be:
-                - String commands: "open", "close"
-                - Numeric values: "0" to "1100" (representing 0cm to 11cm gripper width)
-                
-    Value meanings:
-        - "open" or "1100" = Fully open (11cm width)
-        - "close" or "0" = Fully closed (0cm width)  
-        - Any value "0"-"1100" = Proportional opening (e.g., "550" = 5.5cm width)
-    
-    Examples:
-        control_gripper("open")          # Fully open gripper
-        control_gripper("close")         # Fully close gripper
-        control_gripper("550")           # Half open (5.5cm width)
-        control_gripper("1100")          # Fully open (same as "open")
-        control_gripper("0")             # Fully closed (same as "close")
-    """
-    try:
-        import subprocess
-        
-        # Convert command to appropriate ROS2 message
-        if isinstance(command, str):
-            if command.lower() == "open":
-                ros_command = "open"
-                numeric_value = 1100
-                width_cm = 11.0
-            elif command.lower() == "close":
-                ros_command = "close" 
-                numeric_value = 0
-                width_cm = 0.0
-            elif command.isdigit() or (command.replace('.', '').isdigit()):
-                # It's a numeric string
-                try:
-                    numeric_value = float(command)
-                    if not (0 <= numeric_value <= 1100):
-                        return {
-                            "status": "error",
-                            "message": f"Numeric value {numeric_value} out of range. Use 0-1100."
-                        }
-                    
-                    # Convert to ROS command string and width
-                    ros_command = str(int(numeric_value))
-                    width_cm = numeric_value / 100.0  # Convert to cm (1100 -> 11cm)
-                    
-                except (ValueError, TypeError):
-                    return {
-                        "status": "error",
-                        "message": f"Invalid numeric command '{command}'. Use number 0-1100."
-                    }
-            else:
-                return {
-                    "status": "error",
-                    "message": f"Invalid string command '{command}'. Use 'open', 'close', or numeric value 0-1100."
-                }
-        else:
-            # Direct numeric input
-            try:
-                numeric_value = float(command)
-                if not (0 <= numeric_value <= 1100):
-                    return {
-                        "status": "error",
-                        "message": f"Numeric value {numeric_value} out of range. Use 0-1100."
-                    }
-                
-                ros_command = str(int(numeric_value))
-                width_cm = numeric_value / 100.0
-                
-            except (ValueError, TypeError):
-                return {
-                    "status": "error",
-                    "message": f"Invalid command '{command}'. Use 'open', 'close', or number 0-1100."
-                }
-        
-        # Execute ROS2 command using the same pattern as your other tools
-        cmd = f"source /opt/ros/humble/setup.bash && ros2 topic pub --once /gripper_command std_msgs/String \"{{data: '{ros_command}'}}\""
-        
-        try:
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                executable='/bin/bash',
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            
-            if result.returncode == 0:
-                return {
-                    "status": "success",
-                    "message": f"Gripper command sent successfully",
-                    "command_sent": ros_command,
-                    "numeric_value": numeric_value,
-                    "width_cm": width_cm,
-                    "ros_output": result.stdout.strip() if result.stdout else None
-                }
-            else:
-                return {
-                    "status": "error", 
-                    "message": f"ROS2 command failed: {result.stderr.strip()}",
-                    "command_attempted": ros_command
-                }
-                
-        except subprocess.TimeoutExpired:
-            return {
-                "status": "error",
-                "message": "ROS2 command timed out (5 seconds)"
-            }
-        except FileNotFoundError:
-            return {
-                "status": "error", 
-                "message": "ros2 command not found. Make sure ROS2 is properly installed and sourced."
-            }
-            
-    except Exception as e:
-        import traceback
-        return {
-            "status": "error",
-            "message": f"Unexpected error in gripper control: {str(e)}",
-            "traceback": traceback.format_exc()
-        }
-
-@mcp.tool()
 def verify_grasp(timeout: int = 5) -> Dict[str, Any]:
     """
     Get gripper width information including fully open, fully closed, and current width.
@@ -1859,95 +1733,6 @@ def list_primitive_scripts():
         }
 
 @mcp.tool()
-def move_down(height: float = None):
-    """
-    Execute the move_down.py primitive script.
-    This tool moves the robot down in Z-axis with gripper force monitoring.
-    The robot will stop when gripper force exceeds 60.
-    
-    Uses the same pose reading logic as move_to_safe_height.py.
-    
-    Args:
-        height: Target Z position in meters (optional, defaults to current height - 0.2m if not provided)
-    
-    Returns:
-        Dictionary with execution status and results
-    """
-    try:
-        import subprocess
-        import os
-        
-        # Path to the move_down.py script
-        script_path = "/home/aaugus11/Documents/ros-mcp-server/primitives/move_down.py"
-        
-        # Check if script exists
-        if not os.path.exists(script_path):
-            return {
-                "status": "error",
-                "error": f"Move down script not found: {script_path}"
-            }
-        
-        # Build the python command
-        if height is not None:
-            python_cmd = f"/usr/bin/python3 move_down.py --height {height}"
-        else:
-            python_cmd = "/usr/bin/python3 move_down.py"
-        
-        # Build final command
-        cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash", 
-            "export ROS_DOMAIN_ID=0",
-            "cd /home/aaugus11/Documents/ros-mcp-server/primitives",
-            python_cmd
-        ]
-        
-        cmd = "\n".join(cmd_parts)
-        
-        # Run with bash shell to source environment
-        result = subprocess.run(
-            cmd,
-            shell=True,
-            executable='/bin/bash',
-            capture_output=True,
-            text=True,
-            timeout=30  # Reduced timeout to 30 seconds for faster feedback
-        )
-        
-        if result.returncode == 0:
-            return {
-                "status": "success",
-                "message": "Move down operation completed successfully",
-                "script_path": script_path,
-                "output": result.stdout,
-                "stderr": result.stderr if result.stderr else None
-            }
-        else:
-            return {
-                "status": "error",
-                "message": f"Move down operation failed with return code {result.returncode}",
-                "script_path": script_path,
-                "output": result.stdout if result.stdout else None,
-                "stderr": result.stderr,
-                "return_code": result.returncode
-            }
-            
-    except subprocess.TimeoutExpired:
-        return {
-            "status": "timeout",
-            "message": "Move down operation timed out after 30 seconds. The script may be waiting for ROS2 services or hanging.",
-            "script_name": "move_down.py",
-            "debug_info": "Check if ROS2 services are running: ros2 topic list, ros2 service list"
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "script_name": "move_down.py",
-            "traceback": traceback.format_exc()
-        }
-
-@mcp.tool()
 def visual_servo_pick(topic_name: str = "/object_poses/jenga_4", hover_height: float = 0.15, duration: int = 30):
     """
     Execute visual servo pick alignment for Jenga blocks.
@@ -2424,138 +2209,6 @@ def update_yolo_prompts(color_map: dict):
         }
 
 @mcp.tool()
-def move_to_safe_height(safe_height: float = 0.481) -> Dict[str, Any]:
-    """
-    Move robot to safe height while maintaining current position.
-    Reads current end-effector pose and moves to same x,y coordinates with specified z height.
-    Uses fixed orientation [0, 180, 0] for consistent downward-pointing end-effector.
-    
-    Args:
-        safe_height: Target Z height in meters (default: 0.481)
-        
-    Returns:
-        Dictionary with execution status and results
-    """
-    try:
-        import subprocess
-        import yaml
-        import re
-        import sys
-        import os
-        
-        # Add custom libraries to Python path
-        custom_lib_path = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries"
-        if custom_lib_path not in sys.path:
-            sys.path.append(custom_lib_path)
-        
-        from ik_solver import compute_ik
-        
-        def quaternion_to_rpy(x, y, z, w):
-            """Convert quaternion to roll, pitch, yaw in degrees"""
-            import math
-            
-            # Roll
-            sinr_cosp = 2 * (w * x + y * z)
-            cosr_cosp = 1 - 2 * (x * x + y * y)
-            roll = math.degrees(math.atan2(sinr_cosp, cosr_cosp))
-            
-            # Pitch
-            sinp = 2 * (w * y - z * x)
-            if abs(sinp) >= 1:
-                pitch = math.degrees(math.copysign(math.pi / 2, sinp))
-            else:
-                pitch = math.degrees(math.asin(sinp))
-            
-            # Yaw
-            siny_cosp = 2 * (w * z + x * y)
-            cosy_cosp = 1 - 2 * (y * y + z * z)
-            yaw = math.degrees(math.atan2(siny_cosp, cosy_cosp))
-            
-            return [roll, pitch, yaw]
-        
-        # Read current end-effector pose (same method as move_down.py)
-        result = subprocess.run([
-            'bash', '-c', 
-            'source /opt/ros/humble/setup.bash && ros2 topic echo /tcp_pose_broadcaster/pose --once'
-        ], capture_output=True, text=True, timeout=10)
-        
-        if result.returncode != 0:
-            return {
-                "status": "error",
-                "message": f"Failed to read pose topic: {result.stderr}"
-            }
-        
-        # Clean the output to remove special characters (same as standalone script)
-        cleaned_output = result.stdout
-        
-        # Remove ANSI escape sequences and other special characters
-        cleaned_output = re.sub(r'\x1b\[[0-9;]*m', '', cleaned_output)  # Remove ANSI color codes
-        cleaned_output = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', cleaned_output)  # Remove other escape sequences
-        cleaned_output = re.sub(r'[^\x20-\x7E\n\r]', '', cleaned_output)  # Keep only printable ASCII and newlines
-        
-        # Find the YAML content between the --- markers
-        yaml_start = cleaned_output.find('---')
-        yaml_end = cleaned_output.rfind('---')
-        
-        if yaml_start != -1 and yaml_end != -1 and yaml_end > yaml_start:
-            yaml_content = cleaned_output[yaml_start:yaml_end].strip()
-        else:
-            yaml_content = cleaned_output.strip()
-        
-        # Parse the YAML output
-        data = yaml.safe_load(yaml_content)
-        
-        if 'pose' not in data:
-            return {
-                "status": "error",
-                "message": "No pose data found in command output"
-            }
-        
-        pose_data = data['pose']
-        current_pos = [
-            pose_data['position']['x'],
-            pose_data['position']['y'], 
-            pose_data['position']['z']
-        ]
-        
-        current_quat = [
-            pose_data['orientation']['x'],
-            pose_data['orientation']['y'],
-            pose_data['orientation']['z'],
-            pose_data['orientation']['w']
-        ]
-        
-        # Convert to RPY
-        current_rpy = quaternion_to_rpy(
-            current_quat[0], current_quat[1], 
-            current_quat[2], current_quat[3]
-        )
-        
-        # Create target pose
-        target_position = current_pos.copy()
-        target_position[2] = safe_height
-        
-        target_rpy = [0, 180, 0]  # Fixed orientation [0, 180, 0]
-        
-        # Compute IK
-        joint_angles = compute_ik(target_position, target_rpy)
-        
-        if joint_angles is None:
-            return {
-                "status": "error",
-                "message": "IK failed: couldn't compute safe height position"
-            }
-        
-        # Execute movement using existing execute_joint_trajectory function
-        return execute_joint_trajectory(joint_angles.tolist(), 3.0)
-        
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Failed to move to safe height: {str(e)}"
-        }
-
-@mcp.tool()
 def push_primitive(initial_x: float, initial_y: float, initial_z: float, initial_yaw: float,
                   final_x: float, final_y: float, final_z: float, final_yaw: float,
                   ee_height: float = 0.15, initial_offset: float = 0.05, 
@@ -2762,6 +2415,446 @@ def push_real(object_name: str = "jenga_4", final_x: float = 0.0, final_y: float
         return {
             "status": "error",
             "message": f"Failed to execute push real primitive: {str(e)}"
+        }
+
+@mcp.tool()
+def move_home() -> Dict[str, Any]:
+    """Move robot to home position."""
+    try:
+        import subprocess
+        import sys
+        import os
+        
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        move_home_path = os.path.join(script_dir, "primitives", "move_home.py")
+        
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash",
+            "export ROS_DOMAIN_ID=0",
+            f"cd {script_dir}/primitives",
+            f"timeout 30 /usr/bin/python3 move_home.py"
+        ]
+        
+        cmd = "\n".join(cmd_parts)
+        
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=35
+        )
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "Move home executed successfully",
+                "output": result.stdout
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Move home failed with return code {result.returncode}",
+                "error": result.stderr,
+                "output": result.stdout
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": "Move home timed out after 30 seconds"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to execute move home: {str(e)}"
+        }
+
+@mcp.tool()
+def move_to_grasp(object_name: str, grasp_id: int) -> Dict[str, Any]:
+    """Move to grasp position."""
+    try:
+        import subprocess
+        import sys
+        import os
+        
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        visual_servo_path = os.path.join(script_dir, "primitives", "visual_servo_grasp_sim.py")
+        
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash",
+            "export ROS_DOMAIN_ID=0",
+            f"cd {script_dir}/primitives",
+            f"timeout 60 /usr/bin/python3 visual_servo_grasp_sim.py --object-name \"{object_name}\" --grasp-id {grasp_id}"
+        ]
+        
+        cmd = "\n".join(cmd_parts)
+        
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=70
+        )
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "Move to grasp executed successfully",
+                "output": result.stdout,
+                "parameters": {
+                    "object_name": object_name,
+                    "grasp_id": grasp_id
+                }
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Move to grasp failed with return code {result.returncode}",
+                "error": result.stderr,
+                "output": result.stdout
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": "Move to grasp timed out after 60 seconds"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to execute move to grasp: {str(e)}"
+        }
+
+@mcp.tool()
+def reorient_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
+    """Reorient object for assembly."""
+    try:
+        import subprocess
+        import sys
+        import os
+        
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        reorient_path = os.path.join(script_dir, "primitives", "reorient_for_assembly.py")
+        
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash",
+            "export ROS_DOMAIN_ID=0",
+            f"cd {script_dir}/primitives",
+            f"timeout 60 /usr/bin/python3 reorient_for_assembly.py --object-name \"{object_name}\" --base-name \"{base_name}\""
+        ]
+        
+        cmd = "\n".join(cmd_parts)
+        
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=70
+        )
+        
+        # Check for error messages in output even if returncode is 0
+        output_lower = (result.stdout + result.stderr).lower()
+        has_error = (
+            "error" in output_lower or 
+            "failed" in output_lower or 
+            "no pose data" in output_lower or
+            "not found" in output_lower
+        )
+        
+        if result.returncode == 0 and not has_error:
+            return {
+                "status": "success",
+                "message": "Reorient for assembly executed successfully",
+                "output": result.stdout,
+                "parameters": {
+                    "object_name": object_name,
+                    "base_name": base_name
+                }
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Reorient for assembly failed with return code {result.returncode}" if result.returncode != 0 else "Reorient for assembly failed (error detected in output)",
+                "error": result.stderr,
+                "output": result.stdout
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": "Reorient for assembly timed out after 60 seconds"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to execute reorient for assembly: {str(e)}"
+        }
+
+@mcp.tool()
+def translate_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
+    """Translate object to target position for assembly."""
+    try:
+        import subprocess
+        import sys
+        import os
+        
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        translate_path = os.path.join(script_dir, "primitives", "translate_for_assembly.py")
+        
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash",
+            "export ROS_DOMAIN_ID=0",
+            f"cd {script_dir}/primitives",
+            f"timeout 60 /usr/bin/python3 translate_for_assembly.py --object-name \"{object_name}\" --base-name \"{base_name}\""
+        ]
+        
+        cmd = "\n".join(cmd_parts)
+        
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=70
+        )
+        
+        # Check for error messages in output even if returncode is 0
+        output_lower = (result.stdout + result.stderr).lower()
+        has_error = (
+            "error" in output_lower or 
+            "failed" in output_lower or 
+            "no pose data" in output_lower or
+            "not found" in output_lower
+        )
+        
+        if result.returncode == 0 and not has_error:
+            return {
+                "status": "success",
+                "message": "Translate for assembly executed successfully",
+                "output": result.stdout,
+                "parameters": {
+                    "object_name": object_name,
+                    "base_name": base_name
+                }
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Translate for assembly failed with return code {result.returncode}" if result.returncode != 0 else "Translate for assembly failed (error detected in output)",
+                "error": result.stderr,
+                "output": result.stdout
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": "Translate for assembly timed out after 60 seconds"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to execute translate for assembly: {str(e)}"
+        }
+
+@mcp.tool()
+def move_down(mode: str = "real") -> Dict[str, Any]:
+    """Move robot down with force monitoring."""
+    try:
+        import subprocess
+        import sys
+        import os
+        
+        if mode not in ["sim", "real"]:
+            return {
+                "status": "error",
+                "message": f"Invalid mode '{mode}'. Must be 'sim' or 'real'"
+            }
+        
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        move_down_path = os.path.join(script_dir, "primitives", "move_down.py")
+        
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash",
+            "export ROS_DOMAIN_ID=0",
+            f"cd {script_dir}/primitives",
+            f"/usr/bin/python3 move_down.py --mode {mode}"
+        ]
+        
+        cmd = "\n".join(cmd_parts)
+        
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minutes - move_down can run incrementally until force threshold
+        )
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "Move down executed successfully",
+                "output": result.stdout,
+                "parameters": {
+                    "mode": mode
+                }
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Move down failed with return code {result.returncode}",
+                "error": result.stderr,
+                "output": result.stdout
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": "Move down timed out after 5 minutes. The robot may still be moving - check robot status."
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to execute move down: {str(e)}"
+        }
+
+@mcp.tool()
+def control_gripper(command: str, mode: str = "sim") -> Dict[str, Any]:
+    """Control gripper with verification."""
+    try:
+        import subprocess
+        import sys
+        import os
+        
+        if command.lower() not in ["open", "close"]:
+            return {
+                "status": "error",
+                "message": f"Invalid command '{command}'. Use 'open' or 'close'."
+            }
+        
+        if mode not in ["sim", "real"]:
+            return {
+                "status": "error",
+                "message": f"Invalid mode '{mode}'. Must be 'sim' or 'real'"
+            }
+        
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        control_gripper_path = os.path.join(script_dir, "primitives", "control_gripper.py")
+        
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash",
+            "export ROS_DOMAIN_ID=0",
+            f"cd {script_dir}/primitives",
+            f"timeout 60 /usr/bin/python3 control_gripper.py {command.lower()} --mode {mode}"
+        ]
+        
+        cmd = "\n".join(cmd_parts)
+        
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=70
+        )
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "Gripper control executed successfully",
+                "output": result.stdout,
+                "parameters": {
+                    "command": command.lower(),
+                    "mode": mode
+                }
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Gripper control failed with return code {result.returncode}",
+                "error": result.stderr,
+                "output": result.stdout
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": "Gripper control timed out after 60 seconds"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to execute gripper control: {str(e)}"
+        }
+
+@mcp.tool()
+def move_to_safe_height() -> Dict[str, Any]:
+    """Move robot to safe height."""
+    try:
+        import subprocess
+        import sys
+        import os
+        
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        move_to_safe_height_path = os.path.join(script_dir, "primitives", "move_to_safe_height.py")
+        
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash",
+            "export ROS_DOMAIN_ID=0",
+            f"cd {script_dir}/primitives",
+            f"timeout 30 /usr/bin/python3 move_to_safe_height.py"
+        ]
+        
+        cmd = "\n".join(cmd_parts)
+        
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=35
+        )
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "Move to safe height executed successfully",
+                "output": result.stdout
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Move to safe height failed with return code {result.returncode}",
+                "error": result.stderr,
+                "output": result.stdout
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": "Move to safe height timed out after 30 seconds"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to execute move to safe height: {str(e)}"
         }
 
 @mcp.tool()
