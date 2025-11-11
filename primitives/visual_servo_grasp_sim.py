@@ -153,7 +153,7 @@ class DirectObjectMove(Node):
         self.calibration_offset_x = -0.0  # -0mm correction (move left)
         self.calibration_offset_y = -0.0  # +0mm correction (move forward)
         # Object to end-effector offset distance (maintain this distance from object/grasp point)
-        self.object_to_ee_offset = 0.115  # 0.1m = 10cm
+        self.object_to_ee_offset = 0.120  # 0.12m = 12cm
         
         # Initialize Kalman filter
         self.kalman_filter = PoseKalmanFilter(process_noise=0.005, measurement_noise=0.05)
@@ -456,13 +456,13 @@ class DirectObjectMove(Node):
         
         # Calculate target end-effector position
         if self.selected_grasp_point is not None:
-            # For grasp points: place EE 0.115m above the grasp point (in Z direction)
+            # For grasp points: place EE above the grasp point (in Z direction)
             target_ee_position = np.array([
                 object_position[0],
                 object_position[1],
-                object_position[2] + 0.115
+                object_position[2] + self.object_to_ee_offset
             ])
-            self.get_logger().info(f"📏 Placing EE 0.115m above grasp point at Z={target_ee_position[2]:.3f}m")
+            self.get_logger().info(f"📏 Placing EE {self.object_to_ee_offset*100:.1f}cm above grasp point at Z={target_ee_position[2]:.3f}m")
         elif self.height is not None:
             # If height is explicitly specified, use that exact height
             target_ee_position = np.array([
