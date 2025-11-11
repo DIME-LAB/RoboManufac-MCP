@@ -24,6 +24,7 @@ import json
 import yaml
 import argparse
 import threading
+import time
 
 # Add custom libraries to Python path
 custom_lib_path = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries"
@@ -54,6 +55,7 @@ GRIPPER_FORCE_THRESHOLD = 100.0  # Stop when gripper force exceeds this value (f
 FORCE_THRESHOLD = -20.0  # Stop when any axis force exceeds (is less than) -10N (for real mode)
 MOVEMENT_DURATION = 15.0  # Duration for smooth movement in seconds
 FORCE_CHECK_INTERVAL = 0.02  # Check force every 20ms during movement
+MOVE_DOWN_INCREMENT = 0.4  # Distance to move down per increment in meters
 # =============================================================================
 
 class MoveDown(Node):
@@ -74,7 +76,7 @@ class MoveDown(Node):
             '/scaled_joint_trajectory_controller/follow_joint_trajectory'
         )
         
-        # Target height (if None, will use current height - 0.2m as default)
+        # Target height (if None, will use current height - MOVE_DOWN_INCREMENT as default)
         self.target_height = target_height
         
         # Force monitoring - different for sim vs real
@@ -94,8 +96,12 @@ class MoveDown(Node):
         # Timer for force monitoring during movement
         self.force_monitor_timer = None
         
+        # Timer for scheduling next movement (non-blocking)
+        self.next_movement_timer = None
+        
         # Movement state
         self.moving = False
+        self.current_z_position = None  # Track current Z position for incremental movements
         
         # EE pose data storage
         self.ee_pose_received = False
@@ -306,6 +312,20 @@ class MoveDown(Node):
             self.force_monitor_timer.cancel()
             self.force_monitor_timer = None
             self.get_logger().info("Stopped force monitoring")
+    
+    def schedule_next_movement(self):
+        """Schedule the next movement using a ROS2 one-shot timer (non-blocking)"""
+        if self.next_movement_timer:
+            self.next_movement_timer.cancel()
+            self.next_movement_timer = None
+        
+        def timer_callback():
+            if self.next_movement_timer:
+                self.next_movement_timer.cancel()
+                self.next_movement_timer = None
+            self.move_down_continue()
+        
+        self.next_movement_timer = self.create_timer(0.3, timer_callback)
 
     def check_force_during_execution(self):
         """Check force during trajectory execution and cancel if threshold exceeded"""
@@ -369,49 +389,88 @@ class MoveDown(Node):
         shutdown_timer.daemon = True
         shutdown_timer.start()
 
+    def move_down_continue(self):
+        """Continue moving down using stored position (non-blocking, called from timer)"""
+        # Get orientation from callback data (needed for IK)
+        if self.ee_quat is None:
+            for _ in range(3):
+                rclpy.spin_once(self, timeout_sec=0.05)
+                if self.ee_quat is not None:
+                    break
+            if self.ee_quat is None:
+                self.get_logger().warn("No orientation data, using default")
+                current_quat = [-0.001, 0.707, -0.707, 0.001]
+            else:
+                current_quat = self.ee_quat.tolist()
+        else:
+            current_quat = self.ee_quat.tolist()
+        
+        # Use stored Z position (updated from previous target), X/Y from callback if available
+        if self.ee_position is not None:
+            current_pos = [self.ee_position[0], self.ee_position[1], self.current_z_position]
+        else:
+            current_pos = [0, 0, self.current_z_position]
+        
+        self._execute_move_down(current_pos, current_quat)
+    
     def move_down(self):
         """Move down while maintaining current position and orientation"""
-        # Read current end-effector pose
-        self.get_logger().info("Reading current end-effector pose...")
-        pose_data = self.read_current_ee_pose()
-        
-        if pose_data is None:
-            self.get_logger().error("Could not read current end-effector pose")
-            rclpy.shutdown()
-            return
+        # Initialize current Z position if not set
+        if self.current_z_position is None:
+            # Read current end-effector pose
+            self.get_logger().info("Reading current end-effector pose...")
+            pose_data = self.read_current_ee_pose()
             
-        current_pos = pose_data['position']
-        current_quat = pose_data['orientation']
+            if pose_data is None:
+                self.get_logger().error("Could not read current end-effector pose")
+                rclpy.shutdown()
+                return
+                
+            current_pos = pose_data['position']
+            current_quat = pose_data['orientation']
+            self.current_z_position = current_pos[2]
+        else:
+            # Use stored position and read fresh pose for orientation
+            self.get_logger().info("Reading current end-effector pose for orientation...")
+            pose_data = self.read_current_ee_pose()
+            
+            if pose_data is None:
+                self.get_logger().error("Could not read current end-effector pose")
+                rclpy.shutdown()
+                return
+                
+            # Use actual current position from EE pose callback
+            if self.ee_position is not None:
+                current_pos = self.ee_position.tolist()
+                self.current_z_position = current_pos[2]  # Update from actual position
+            else:
+                current_pos = [0, 0, self.current_z_position]
+            current_quat = pose_data['orientation']
         
-        # Convert quaternion directly to rotation matrix to avoid precision loss from RPY conversion
+        # Continue with movement calculation
+        self._execute_move_down(current_pos, current_quat)
+    
+    def _execute_move_down(self, current_pos, current_quat):
+        """Execute the actual move down calculation and trajectory sending"""
         from scipy.spatial.transform import Rotation as Rot
         
-        # Keep the current orientation (don't change it, just move down)
-        # Convert quaternion directly to rotation matrix for more accurate IK
         target_rotation = Rot.from_quat(current_quat)
         target_rot_matrix = target_rotation.as_matrix()
-        
-        # Also compute RPY for logging purposes
-        current_rpy = self.quaternion_to_rpy(
-            current_quat[0], current_quat[1], 
-            current_quat[2], current_quat[3]
-        )
+        current_rpy = self.quaternion_to_rpy(current_quat[0], current_quat[1], current_quat[2], current_quat[3])
         
         self.get_logger().info(f"Current EE position: {current_pos}")
         self.get_logger().info(f"Current EE quaternion: {current_quat}")
         self.get_logger().info(f"Current EE RPY (deg): {current_rpy}")
-        self.get_logger().info(f"Target orientation: keeping current quaternion (no RPY conversion)")
 
-        # Create target position - move down (decrease Z)
-        target_position = current_pos.copy()
+        target_position = list(current_pos)
         
         if self.target_height is not None:
             target_position[2] = self.target_height
             self.get_logger().info(f"Using specified target height: {self.target_height}m")
         else:
-            # Default: move down 0.2m from current position
-            target_position[2] = current_pos[2] - 0.2
-            self.get_logger().info(f"Using default: moving down 0.2m to {target_position[2]:.3f}m")
+            target_position[2] = self.current_z_position - MOVE_DOWN_INCREMENT
+            self.get_logger().info(f"Moving down {MOVE_DOWN_INCREMENT}m from {self.current_z_position:.3f}m to {target_position[2]:.3f}m")
+            self.current_z_position = target_position[2]  # Update for next movement
         
         self.get_logger().info(f"Target position: {target_position}")
         if self.mode == 'sim':
@@ -419,84 +478,59 @@ class MoveDown(Node):
         else:
             self.get_logger().info(f"Force threshold: {FORCE_THRESHOLD}N (any axis)")
 
-        # Compute inverse kinematics for target pose
-        # Use quaternion directly converted to rotation matrix for more accurate orientation preservation
+        # Compute inverse kinematics
         try:
             from scipy.optimize import minimize
-            from scipy.spatial.transform import Rotation as Rot
             from ik_solver import ik_objective_quaternion, forward_kinematics, dh_params
             
-            # Create target pose with quaternion-derived rotation matrix
             target_pose = np.eye(4)
             target_pose[:3, 3] = target_position
             target_pose[:3, :3] = target_rot_matrix
             
             self.get_logger().info(f"Computing IK for position: {target_position}")
-            self.get_logger().info(f"Using quaternion-derived rotation matrix directly (NO RPY conversion)")
             
-            # Use quaternion-based IK directly - no RPY conversion at all!
-            # Since we're only moving down, current joint angles should be very close to the solution
-            joint_angles = None
-            best_result = None
-            best_cost = float('inf')
-            max_tries = 5
-            dx = 0.001
-            
-            # Primary seed: use current joint angles from joint state subscription
-            # This is the best seed since we're only moving down (small Z change)
             if self.current_joint_angles is None:
                 self.get_logger().error("Current joint angles not available! Cannot compute IK.")
                 rclpy.shutdown()
                 return
             
             q_guess = self.current_joint_angles.copy()
-            self.get_logger().info(f"Using current joint angles from joint state as seed: {q_guess}")
+            self.get_logger().info(f"Using current joint angles as seed: {q_guess}")
             
-            # Try IK with current joint angles and position perturbations
-            solution_found = False
+            joint_angles = None
+            best_result = None
+            best_cost = float('inf')
+            max_tries = 5
+            dx = 0.001
+            
             for i in range(max_tries):
-                if solution_found:
-                    break
-                    
-                # Try small x-shift each iteration (helps with workspace boundaries)
                 perturbed_position = np.array(target_position).copy()
                 perturbed_position[0] += i * dx
                 
                 perturbed_pose = target_pose.copy()
                 perturbed_pose[:3, 3] = perturbed_position
                 
-                joint_bounds = [(-np.pi, np.pi)] * 6
-                
-                # Use quaternion-based objective directly - NO RPY conversion!
                 result = minimize(ik_objective_quaternion, q_guess, args=(perturbed_pose,), 
-                                method='L-BFGS-B', bounds=joint_bounds)
+                                method='L-BFGS-B', bounds=[(-np.pi, np.pi)] * 6)
                 
                 if result.success:
                     cost = ik_objective_quaternion(result.x, perturbed_pose)
                     
-                    # Check if this is a good solution
                     if cost < 0.01:
-                        self.get_logger().info(f"Quaternion-based IK succeeded with current joint angles seed (perturbation {i}), cost={cost:.6f}")
+                        self.get_logger().info(f"IK succeeded (perturbation {i}), cost={cost:.6f}")
                         joint_angles = result.x
-                        solution_found = True
-                        
-                        # Verify orientation accuracy
                         T_result = forward_kinematics(dh_params, joint_angles)
                         orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
                         self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
                         break
                     
-                    # Keep track of best solution
                     if cost < best_cost:
                         best_cost = cost
                         best_result = result.x
             
-            # If we found any reasonable solution, use it
             if joint_angles is None and best_result is not None and best_cost < 0.1:
-                self.get_logger().info(f"Using best quaternion-based IK solution with cost={best_cost:.6f}")
+                self.get_logger().info(f"Using best IK solution with cost={best_cost:.6f}")
                 joint_angles = best_result
-                
-                # Verify orientation accuracy
                 T_result = forward_kinematics(dh_params, joint_angles)
                 orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
                 self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
@@ -508,8 +542,7 @@ class MoveDown(Node):
                 
             self.get_logger().info(f"Computed joint angles: {joint_angles}")
             
-            # Create trajectory point directly from joint angles (we already computed them from quaternion-based IK)
-            # No need for move_robust since we have the exact joint angles
+            # Create and send trajectory
             point = JointTrajectoryPoint(
                 positions=[float(x) for x in joint_angles],
                 velocities=[0.0] * 6,
@@ -520,7 +553,6 @@ class MoveDown(Node):
             traj.joint_names = self.joint_names
             traj.points = [point]
             
-            # Create and send trajectory
             goal = FollowJointTrajectory.Goal()
             goal.trajectory = traj
             goal.goal_time_tolerance = Duration(sec=1)
@@ -528,10 +560,11 @@ class MoveDown(Node):
             self.get_logger().info("Sending trajectory to move down...")
             self.moving = True
             
-            # Start force monitoring
-            self.start_force_monitoring()
+            # Clear old futures/callbacks before sending new goal
+            self._current_goal_handle = None
+            self._send_goal_future = None
+            self._get_result_future = None
             
-            # Send goal
             self._send_goal_future = self.action_client.send_goal_async(goal)
             self._send_goal_future.add_done_callback(self.goal_response)
             
@@ -555,6 +588,9 @@ class MoveDown(Node):
         else:
             self.get_logger().info("Move down trajectory accepted. Monitoring force on all axes...")
         
+        # Start force monitoring AFTER goal is accepted
+        self.start_force_monitoring()
+        
         self._get_result_future = goal_handle.get_result_async()
         self._get_result_future.add_done_callback(self.goal_result)
 
@@ -566,33 +602,47 @@ class MoveDown(Node):
             self.moving = False
             self._current_goal_handle = None
             
+            # Handle different trajectory completion statuses
             if result.status == 1:  # SUCCEEDED
-                if self.force_threshold_reached:
-                    self.get_logger().info("Movement completed: Force threshold reached on one or more axes")
-                else:
-                    self.get_logger().info("Movement completed successfully")
-            elif result.status == 5:  # PREEMPTED (cancelled)
-                self.get_logger().info("Trajectory was preempted (likely due to force threshold)")
-                if self.force_threshold_reached:
-                    self.get_logger().info("Force threshold reached. Movement stopped.")
+                status_msg = "Movement completed successfully"
+            elif result.status == 5:  # PREEMPTED
+                status_msg = "Trajectory was preempted"
             elif result.status == 4:  # ABORTED
-                self.get_logger().warn("Trajectory was aborted by controller")
-                if self.force_threshold_reached:
-                    self.get_logger().info("Force threshold reached. Movement stopped.")
+                status_msg = "Trajectory was aborted by controller"
             else:
                 self.get_logger().error(f"Trajectory failed with status: {result.status}")
+                rclpy.shutdown()
+                return
+            
+            # Check if force threshold was reached
+            if self.force_threshold_reached:
+                self.get_logger().info(f"{status_msg}: Force threshold reached. Stopping.")
+                if self.ee_position is not None:
+                    self.current_z_position = self.ee_position[2]
+                rclpy.shutdown()
+            else:
+                # Continue with next movement
+                if result.status == 5:
+                    self.get_logger().warn(f"{status_msg} (not due to force). Continuing...")
+                elif result.status == 4:
+                    self.get_logger().info(f"{status_msg} (not due to force). Continuing...")
+                else:
+                    self.get_logger().info(f"{status_msg}. Continuing with next {MOVE_DOWN_INCREMENT}m increment...")
+                
+                self.force_threshold_reached = False
+                self.schedule_next_movement()
                 
         except Exception as e:
             self.get_logger().error(f"Error in goal result callback: {e}")
+            rclpy.shutdown()
         finally:
             self.stop_force_monitoring()
             self.moving = False
-            rclpy.shutdown()
 
 def main(args=None):
     parser = argparse.ArgumentParser(description='Move Down Primitive with force monitoring on all axes')
     parser.add_argument('--height', type=float, default=None,
-                       help='Target height in meters (optional, defaults to current height - 0.2m if not provided)')
+                       help='Target height in meters (optional, defaults to moving down in increments until force threshold)')
     parser.add_argument('--mode', type=str, default='real', choices=['sim', 'real'],
                        help='Mode: "sim" for simulation, "real" for real robot (default: real)')
     
