@@ -19,10 +19,14 @@ class Image:
         self.subscriber = subscriber
         self.topic = topic
 
-    def subscribe(self, save_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def subscribe(self, save_path: Optional[str] = None, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """
         Subscribe to image topic and return data in format compatible with MCP server.
         Returns dict with 'data' key containing RGB numpy array.
+        
+        Args:
+            save_path: Optional path to save the image
+            timeout: Timeout in seconds for receiving the image (default: None, waits indefinitely)
         """
         try:
             subscribe_msg = {
@@ -32,10 +36,16 @@ class Image:
             }
             self.subscriber.send(subscribe_msg)
             
-            raw = self.subscriber.receive_binary()
-            if not raw:
-                print(f"[Image] No data received from subscriber for topic {self.topic}")
-                return None
+            try:
+                raw = self.subscriber.receive_binary(timeout=timeout)
+                if not raw:
+                    print(f"[Image] No data received from subscriber for topic {self.topic}")
+                    return None
+            except Exception as e:
+                if "timeout" in str(e).lower() or "timed out" in str(e).lower():
+                    print(f"[Image] Timeout waiting for image from {self.topic}")
+                    raise TimeoutError(f"Image capture timed out for topic {self.topic}")
+                raise
 
             if isinstance(raw, bytes):
                 raw = raw.decode("utf-8")
