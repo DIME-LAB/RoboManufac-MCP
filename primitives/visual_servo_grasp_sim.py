@@ -135,7 +135,7 @@ class PoseKalmanFilter:
         return self.x[:6], self.x[6:12]
 
 class DirectObjectMove(Node):
-    def __init__(self, topic_name="/objects_poses_sim", object_name="blue_dot_0", height=None, movement_duration=10.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None):
+    def __init__(self, topic_name="/objects_poses_sim", object_name="blue_dot_0", height=None, movement_duration=10.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None, offset=None):
         super().__init__('direct_object_move')
         
         self.topic_name = topic_name
@@ -153,7 +153,7 @@ class DirectObjectMove(Node):
         self.calibration_offset_x = -0.0  # -0mm correction (move left)
         self.calibration_offset_y = -0.0  # +0mm correction (move forward)
         # Object to end-effector offset distance (maintain this distance from object/grasp point)
-        self.object_to_ee_offset = 0.120  # 0.12m = 12cm
+        self.object_to_ee_offset = offset if offset is not None else 0.123  # Default: 0.123m = 12.3cm
         
         # Initialize Kalman filter
         self.kalman_filter = PoseKalmanFilter(process_noise=0.005, measurement_noise=0.05)
@@ -595,6 +595,8 @@ def main(args=None):
                        help='Topic name for grasp points subscription')
     parser.add_argument('--grasp-id', type=int, default=None,
                        help='Specific grasp point ID to use (if provided, will use grasp point instead of object center)')
+    parser.add_argument('--offset', type=float, default=None,
+                       help='Distance offset from object/grasp point in meters (default: 0.123m = 12.3cm)')
     
     # Parse arguments from sys.argv if args is None
     if args is None:
@@ -606,7 +608,8 @@ def main(args=None):
     node = DirectObjectMove(topic_name=args.topic, object_name=args.object_name, 
                       height=args.height, movement_duration=args.movement_duration,
                       target_xyz=args.target_xyz, target_xyzw=args.target_xyzw,
-                      grasp_points_topic=args.grasp_points_topic, grasp_id=args.grasp_id)
+                      grasp_points_topic=args.grasp_points_topic, grasp_id=args.grasp_id,
+                      offset=args.offset)
     
     try:
         while rclpy.ok() and not node.should_exit:
