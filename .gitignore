@@ -182,6 +182,7 @@ pyrightconfig.json
 # misc
 screenshots/
 debug_logs/
+utils/recordings/
 
 # End of https://www.toptal.com/developers/gitignore/api/python
 
