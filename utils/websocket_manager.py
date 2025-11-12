@@ -2,6 +2,7 @@ import socket
 import json
 import websocket
 import base64
+import time
 
 class WebSocketManager:
     def __init__(self, ip: str, port: int, local_ip: str):
@@ -34,16 +35,62 @@ class WebSocketManager:
                 self.close()
 
 
-    def receive_binary(self) -> bytes:
+    def receive_binary(self, timeout: float = None) -> bytes:
         self.connect()
         if self.ws:
             try:
+                if timeout:
+                    self.ws.settimeout(timeout)
                 raw = self.ws.recv()  # raw is JSON string (type: str)
+                if timeout:
+                    self.ws.settimeout(None)  # Reset timeout
                 return raw
+            except (socket.timeout, TimeoutError, OSError) as e:
+                # Handle various timeout exceptions
+                if "timeout" in str(e).lower() or "timed out" in str(e).lower() or isinstance(e, (socket.timeout, TimeoutError)):
+                    print(f"[WebSocket] Receive timeout after {timeout}s")
+                    if timeout:
+                        self.ws.settimeout(None)  # Reset timeout on error
+                    raise TimeoutError(f"WebSocket receive timed out after {timeout}s")
+                raise  # Re-raise if it's a different OSError
             except Exception as e:
                 print(f"Receive error: {e}")
-                self.close()
+                if timeout:
+                    self.ws.settimeout(None)  # Reset timeout on error
+                # Don't close on timeout - let caller handle it
+                if "timeout" not in str(e).lower() and "timed out" not in str(e).lower():
+                    self.close()
+                # Re-raise timeout-related exceptions
+                if "timeout" in str(e).lower() or "timed out" in str(e).lower():
+                    raise TimeoutError(f"WebSocket receive timed out: {e}")
+                raise  # Re-raise other exceptions
         return b""
+    
+    def flush_pending_messages(self, timeout: float = 0.1):
+        """
+        Flush/drain any pending messages from the WebSocket buffer.
+        This helps ensure we get fresh messages on the next subscription.
+        """
+        if not self.ws or not self.ws.connected:
+            return
+        
+        try:
+            # Try to receive messages with a short timeout until no more messages arrive
+            while True:
+                self.ws.settimeout(timeout)
+                try:
+                    _ = self.ws.recv()
+                    # If we got a message, continue draining
+                except:
+                    # No more messages or timeout - we're done
+                    break
+            self.ws.settimeout(None)  # Reset timeout
+        except Exception as e:
+            # If flushing fails, that's okay - just continue
+            try:
+                self.ws.settimeout(None)
+            except:
+                pass
     
     def get_topics(self) -> list[tuple[str, str]]:
         self.connect()
