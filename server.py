@@ -2,6 +2,7 @@ from mcp.server.fastmcp import FastMCP, Image
 from typing import List, Any, Optional, Union
 from pathlib import Path
 import json
+import base64
 from utils.websocket_manager import WebSocketManager
 from msgs.geometry_msgs import Twist, PoseStamped
 from msgs.sensor_msgs import Image as RosImage, JointState
@@ -129,14 +130,43 @@ def capture_camera_image(topic_name: str, timeout: int = 10):
         signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(timeout)
         
+        # First, unsubscribe from the topic to clear any buffered/stale messages
+        # This ensures we get a fresh image on the next subscription
+        try:
+            unsubscribe_msg = {
+                "op": "unsubscribe",
+                "topic": topic_name
+            }
+            ws_manager.send(unsubscribe_msg)
+            # Small delay to ensure unsubscribe is processed
+            time.sleep(0.1)
+            
+            # Flush any pending messages from the WebSocket buffer
+            # This ensures we don't get stale messages from previous subscriptions
+            ws_manager.flush_pending_messages(timeout=0.1)
+        except Exception as e:
+            # If unsubscribe fails, continue anyway - might not be subscribed
+            pass
+        
         # Create dynamic image subscriber for the specified topic
         image_subscriber = RosImage(ws_manager, topic=topic_name)
         
-        # Subscribe and get image data
-        msg = image_subscriber.subscribe()
+        # Subscribe and get image data with timeout
+        msg = image_subscriber.subscribe(timeout=timeout)
         
         # Cancel timeout
         signal.alarm(0)
+        
+        # Unsubscribe after getting the image to prevent message buffering
+        try:
+            unsubscribe_msg = {
+                "op": "unsubscribe",
+                "topic": topic_name
+            }
+            ws_manager.send(unsubscribe_msg)
+        except Exception as e:
+            # If unsubscribe fails, continue anyway
+            pass
         
         result_json["status"] = "success"
         
@@ -358,15 +388,15 @@ def read_topic(topic_name: str, timeout: int = 5):
 
 @mcp.tool()
 def perform_ik(target_position: List[float], target_rpy: List[float], 
-               duration: float = 3.0, 
-               custom_lib_path: str = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries") -> Dict[str, Any]:
+               duration: float = 5.0, 
+               custom_lib_path: str = "/home/aaugus11/Documents/ros-mcp-server/primitives") -> Dict[str, Any]:
     """
     Perform inverse kinematics and execute smooth trajectory movement using ROS2.
     
     Args:
         target_position: [x, y, z] target position in meters
         target_rpy: [roll, pitch, yaw] target orientation in degrees
-        duration: Time to complete the movement in seconds (default: 3.0)
+        duration: Time to complete the movement in seconds (default: 5.0)
         custom_lib_path: Path to your custom IK solver library
         
     Returns:
@@ -389,7 +419,16 @@ def perform_ik(target_position: List[float], target_rpy: List[float],
             }
         
         # Solve IK
-        joint_angles = compute_ik(position=target_position, rpy=target_rpy)
+        try:
+            joint_angles = compute_ik(position=target_position, rpy=target_rpy)
+        except Exception as ik_error:
+            return {
+                "status": "error",
+                "message": f"IK solver raised an exception: {str(ik_error)}",
+                "target_position": target_position,
+                "target_rpy": target_rpy,
+                "duration": duration
+            }
         
         if joint_angles is not None:
             joint_angles_deg = np.degrees(joint_angles)
@@ -411,13 +450,17 @@ def perform_ik(target_position: List[float], target_rpy: List[float],
             else:
                 return {
                     "status": "partial_success",
-                    "message": f"IK solved but trajectory execution failed: {trajectory_result.get('message', 'Unknown error')}",
+                    "message": f"IK solved but trajectory execution failed: {trajectory_result.get('message', 'Unknown error')}. The action server may be temporarily unavailable or busy. Please try running the trajectory again with the same joint angles.",
                     "target_position": target_position,
                     "target_rpy": target_rpy,
                     "joint_angles_rad": joint_angles.tolist(),
                     "joint_angles_deg": joint_angles_deg.tolist(),
                     "duration": duration,
-                    "trajectory_status": "failed"
+                    "trajectory_status": "failed",
+                    "trajectory_error": trajectory_result.get("message"),
+                    "trajectory_output": trajectory_result.get("ros_output"),
+                    "trajectory_stderr": trajectory_result.get("stderr"),
+                    "suggestion": "Try executing the trajectory again using execute_joint_trajectory with the same joint_angles_rad values. The IK solution is valid, only the trajectory execution failed."
                 }
         else:
             return {
@@ -429,20 +472,22 @@ def perform_ik(target_position: List[float], target_rpy: List[float],
             }
             
     except Exception as e:
+        import traceback
         return {
             "status": "error",
-            "message": f"Unexpected error in IK computation: {str(e)}"
+            "message": f"Unexpected error in IK computation: {str(e)}",
+            "traceback": traceback.format_exc()
         }
 
 @mcp.tool()
-def execute_joint_trajectory(joint_angles: List[float], duration: float = 3.0) -> Dict[str, Any]:
+def execute_joint_trajectory(joint_angles: List[float], duration: float = 5.0) -> Dict[str, Any]:
     """
     Execute joint trajectory using ROS2 FollowJointTrajectory action.
     Simple tool that uses ros2 action send_goal command directly.
     
     Args:
         joint_angles: Target joint angles in radians [j1, j2, j3, j4, j5, j6]
-        duration: Time to complete the movement in seconds (default: 3.0)
+        duration: Time to complete the movement in seconds (default: 5.0)
         
     Returns:
         Dictionary with execution result.
@@ -471,8 +516,17 @@ def execute_joint_trajectory(joint_angles: List[float], duration: float = 3.0) -
   goal_time_tolerance: {{sec: 1, nanosec: 0}}
 }}'''
         
-        # Use ros2 action send_goal (same pattern as your read_topic tool)
-        cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && ros2 action send_goal /scaled_joint_trajectory_controller/follow_joint_trajectory control_msgs/action/FollowJointTrajectory '{action_goal}' --feedback"
+        # Use ros2 action send_goal - it waits for completion by default
+        # Set timeout to duration + 5 seconds buffer for communication overhead
+        timeout_seconds = int(duration) + 5
+        # Use timeout command wrapper like move_home does, and structure command similarly
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash",
+            "export ROS_DOMAIN_ID=0",
+            f"timeout {timeout_seconds} ros2 action send_goal /scaled_joint_trajectory_controller/follow_joint_trajectory control_msgs/action/FollowJointTrajectory '{action_goal}'"
+        ]
+        cmd = "\n".join(cmd_parts)
         
         result = subprocess.run(
             cmd,
@@ -480,29 +534,97 @@ def execute_joint_trajectory(joint_angles: List[float], duration: float = 3.0) -
             executable='/bin/bash',
             capture_output=True,
             text=True,
-            timeout=duration + 10
+            timeout=timeout_seconds + 5
         )
         
+        # Combine stdout and stderr for analysis
+        full_output = (result.stdout + "\n" + result.stderr).lower()
+        stdout_original = result.stdout.strip() if result.stdout else ""
+        stderr_original = result.stderr.strip() if result.stderr else ""
+        
+        # Check for success indicators in output
+        # ROS2 action send_goal outputs status like "Goal finished with status: SUCCEEDED" or "Goal finished with status: 4"
+        # Also check for common success patterns
+        has_succeeded = (
+            "goal finished with status: succeeded" in full_output or
+            "goal finished with status: 4" in full_output or
+            "status: succeeded" in full_output or
+            "status: 4" in full_output or
+            "result:" in full_output  # Sometimes just shows result without explicit status
+        )
+        
+        # Check for explicit failure indicators (but be careful - "error" might be too generic)
+        has_explicit_failure = (
+            "goal finished with status: aborted" in full_output or
+            "goal finished with status: rejected" in full_output or
+            "goal finished with status: canceled" in full_output or
+            "goal finished with status: 2" in full_output or  # ABORTED
+            "goal finished with status: 3" in full_output or  # REJECTED
+            "goal finished with status: 5" in full_output or  # CANCELED
+            "status: aborted" in full_output or
+            "status: rejected" in full_output or
+            "status: canceled" in full_output
+        )
+        
+        # If returncode is 0, the command executed successfully
+        # ros2 action send_goal waits for completion by default, so returncode 0 usually means success
+        # However, we should still check for explicit failures
         if result.returncode == 0:
-            return {
-                "status": "success",
-                "message": "Joint trajectory executed successfully",
-                "joint_angles": joint_angles,
-                "duration": duration,
-                "ros_output": result.stdout.strip() if result.stdout else None
-            }
+            if has_explicit_failure:
+                return {
+                    "status": "error",
+                    "message": f"ROS2 action failed: {stderr_original if stderr_original else stdout_original}",
+                    "joint_angles": joint_angles,
+                    "ros_output": stdout_original,
+                    "stderr": stderr_original
+                }
+            elif has_succeeded:
+                # Explicit success indicator found
+                return {
+                    "status": "success",
+                    "message": "Joint trajectory executed successfully",
+                    "joint_angles": joint_angles,
+                    "duration": duration,
+                    "ros_output": stdout_original
+                }
+            else:
+                # Return code 0 but no explicit status - assume success since ros2 action send_goal waits
+                # This handles cases where output format might be different
+                return {
+                    "status": "success",
+                    "message": "Joint trajectory executed successfully (return code 0)",
+                    "joint_angles": joint_angles,
+                    "duration": duration,
+                    "ros_output": stdout_original,
+                    "note": "Success inferred from return code 0 (no explicit status in output)"
+                }
         else:
-            return {
-                "status": "error",
-                "message": f"ROS2 action failed: {result.stderr.strip()}",
-                "joint_angles": joint_angles,
-                "ros_output": result.stdout.strip() if result.stdout else None
-            }
+            # Non-zero return code means failure
+            # Return code 124 typically means timeout
+            if result.returncode == 124:
+                return {
+                    "status": "error",
+                    "message": f"ROS2 action timed out (return code 124). The action server may be temporarily unavailable or busy. Output: {stderr_original if stderr_original else stdout_original}. Please try running the trajectory again - the joint angles are valid, only the execution timed out.",
+                    "joint_angles": joint_angles,
+                    "ros_output": stdout_original,
+                    "stderr": stderr_original,
+                    "suggestion": "Try executing the trajectory again using execute_joint_trajectory with the same joint_angles values. The timeout may have been due to temporary system delays."
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"ROS2 action failed with return code {result.returncode}. Output: {stderr_original if stderr_original else stdout_original}. The action server may be temporarily unavailable or busy. Please try running the trajectory again.",
+                    "joint_angles": joint_angles,
+                    "ros_output": stdout_original,
+                    "stderr": stderr_original,
+                    "suggestion": "Try executing the trajectory again using execute_joint_trajectory with the same joint_angles values."
+                }
             
     except subprocess.TimeoutExpired:
+        timeout_seconds = int(duration) + 5
         return {
             "status": "error",
-            "message": f"ROS2 action timed out after {duration + 10} seconds"
+            "message": f"ROS2 action timed out after {timeout_seconds} seconds. Trajectory may still be executing. This could be due to system delays or the action server taking longer than expected. Try running the command again."
         }
     except Exception as e:
         return {
@@ -2433,7 +2555,7 @@ def move_home() -> Dict[str, Any]:
             "source ~/Desktop/ros2_ws/install/setup.bash",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
-            f"timeout 30 /usr/bin/python3 move_home.py"
+            f"timeout 45 /usr/bin/python3 move_home.py"
         ]
         
         cmd = "\n".join(cmd_parts)
@@ -2444,7 +2566,7 @@ def move_home() -> Dict[str, Any]:
             executable='/bin/bash',
             capture_output=True,
             text=True,
-            timeout=35
+            timeout=50
         )
         
         if result.returncode == 0:
@@ -2464,7 +2586,7 @@ def move_home() -> Dict[str, Any]:
     except subprocess.TimeoutExpired:
         return {
             "status": "error",
-            "message": "Move home timed out after 30 seconds"
+            "message": "Move home timed out after 45 seconds"
         }
     except Exception as e:
         return {
@@ -2474,7 +2596,12 @@ def move_home() -> Dict[str, Any]:
 
 @mcp.tool()
 def move_to_grasp(object_name: str, grasp_id: int) -> Dict[str, Any]:
-    """Move to grasp position."""
+    """Move to grasp position.
+    
+    The grasp_id should be obtained from either:
+    - The captured image space (visual analysis of the image)
+    - The /grasp_points topic (ROS topic that publishes available grasp points)
+    """
     try:
         import subprocess
         import sys
@@ -2574,7 +2701,6 @@ def reorient_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
             return {
                 "status": "success",
                 "message": "Reorient for assembly executed successfully",
-                "output": result.stdout,
                 "parameters": {
                     "object_name": object_name,
                     "base_name": base_name
@@ -2642,7 +2768,6 @@ def translate_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
             return {
                 "status": "success",
                 "message": "Translate for assembly executed successfully",
-                "output": result.stdout,
                 "parameters": {
                     "object_name": object_name,
                     "base_name": base_name
@@ -2665,6 +2790,83 @@ def translate_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
         return {
             "status": "error",
             "message": f"Failed to execute translate for assembly: {str(e)}"
+        }
+
+@mcp.tool()
+def verify_final_assembly_pose(object_name: str, base_name: str) -> Dict[str, Any]:
+    """Verify if object is in correct final assembly pose relative to base."""
+    try:
+        import subprocess
+        import sys
+        import os
+        
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        verify_path = os.path.join(script_dir, "primitives", "verify_final_assembly_pose.py")
+        
+        cmd_parts = [
+            "source /opt/ros/humble/setup.bash",
+            "source ~/Desktop/ros2_ws/install/setup.bash",
+            "export ROS_DOMAIN_ID=0",
+            f"cd {script_dir}/primitives",
+            f"timeout 30 /usr/bin/python3 verify_final_assembly_pose.py --object-name \"{object_name}\" --base-name \"{base_name}\""
+        ]
+        
+        cmd = "\n".join(cmd_parts)
+        
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            capture_output=True,
+            text=True,
+            timeout=40
+        )
+        
+        # Check for error messages in output even if returncode is 0
+        output_lower = (result.stdout + result.stderr).lower()
+        has_error = (
+            "error" in output_lower or 
+            "failed" in output_lower or 
+            "no pose data" in output_lower or
+            "not found" in output_lower or
+            "verification failed" in output_lower or
+            "placement failed" in output_lower
+        )
+        
+        # Check for success indicators
+        has_success = (
+            "verification successful" in output_lower or
+            "verification: success" in output_lower
+        )
+        
+        if result.returncode == 0 and has_success and not has_error:
+            return {
+                "status": "success",
+                "message": "Object is in correct final assembly pose",
+                "output": result.stdout,
+                "parameters": {
+                    "object_name": object_name,
+                    "base_name": base_name
+                }
+            }
+        else:
+            # If returncode is 1 or verification failed, return error
+            return {
+                "status": "error",
+                "message": "Placement failed - Object is NOT in correct final assembly pose" if (result.returncode == 1 or "verification failed" in output_lower) else f"Verify final assembly pose failed with return code {result.returncode}",
+                "error": result.stderr,
+                "output": result.stdout
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": "Verify final assembly pose timed out after 30 seconds"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to execute verify final assembly pose: {str(e)}"
         }
 
 @mcp.tool()
