@@ -84,7 +84,7 @@ class ReorientForAssembly(Node):
         self.action_client = ActionClient(self, FollowJointTrajectory, '/scaled_joint_trajectory_controller/follow_joint_trajectory')
         
         self.get_logger().info("ReorientForAssembly node initialized")
-        self.get_logger().info(f"Assembly config loaded with {len(self.assembly_config.get('components', []))} components")
+        # self.get_logger().info(f"Assembly config loaded with {len(self.assembly_config.get('components', []))} components")
     
     def load_assembly_config(self):
         """Load the assembly configuration from JSON file"""
@@ -181,7 +181,7 @@ class ReorientForAssembly(Node):
     
     def read_current_joint_angles(self):
         """Read current joint angles using ROS2 subscriber"""
-        self.get_logger().info("Reading current joint angles...")
+        # self.get_logger().info("Reading current joint angles...")
         
         # Reset the flag
         self.joint_angles_received = False
@@ -194,8 +194,8 @@ class ReorientForAssembly(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
             timeout_count += 1
             
-            if timeout_count % 10 == 0:  # Log every second
-                self.get_logger().info(f"Waiting for joint angles... ({timeout_count * 0.1:.1f}s)")
+            # if timeout_count % 10 == 0:  # Log every second
+            #     self.get_logger().info(f"Waiting for joint angles... ({timeout_count * 0.1:.1f}s)")
         
         if not self.joint_angles_received:
             self.get_logger().error("Timeout waiting for joint angles message")
@@ -205,7 +205,7 @@ class ReorientForAssembly(Node):
             self.get_logger().error("Joint angles data is None")
             return None
         
-        self.get_logger().info(f"Successfully read joint angles: {self.current_joint_angles}")
+        # self.get_logger().info(f"Successfully read joint angles: {self.current_joint_angles}")
         return self.current_joint_angles.copy()
     
     def compute_ik_with_current_seed(self, target_position, target_quat, max_tries=5, dx=0.001):
@@ -236,7 +236,7 @@ class ReorientForAssembly(Node):
             return None
         
         q_guess = self.current_joint_angles.copy()
-        self.get_logger().info(f"Using current joint angles from joint state as seed: {q_guess}")
+        # self.get_logger().info(f"Using current joint angles from joint state as seed: {q_guess}")
         
         # Try IK with current joint angles and position perturbations
         solution_found = False
@@ -265,12 +265,12 @@ class ReorientForAssembly(Node):
                 
                 # Check if this is a good solution
                 if cost < 0.01:
-                    self.get_logger().info(f"Quaternion-based IK succeeded with current joint angles seed (perturbation {i}), cost={cost:.6f}")
+                    # self.get_logger().info(f"Quaternion-based IK succeeded with current joint angles seed (perturbation {i}), cost={cost:.6f}")
                     
                     # Verify orientation accuracy
-                    T_result = forward_kinematics(dh_params, result.x)
-                    orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
-                    self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
+                    # T_result = forward_kinematics(dh_params, result.x)
+                    # orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
+                    # self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
                     
                     return result.x
                 
@@ -281,17 +281,17 @@ class ReorientForAssembly(Node):
         
         # If we found any reasonable solution, use it
         if best_result is not None and best_cost < 0.1:
-            self.get_logger().info(f"Using best quaternion-based IK solution with cost={best_cost:.6f}")
+            # self.get_logger().info(f"Using best quaternion-based IK solution with cost={best_cost:.6f}")
             
             # Verify orientation accuracy
-            T_result = forward_kinematics(dh_params, best_result)
-            orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
-            self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
+            # T_result = forward_kinematics(dh_params, best_result)
+            # orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
+            # self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
             
             return best_result
         
         # Fallback: Try multiple predefined seeds if current seed failed
-        self.get_logger().warn("IK failed with current joint angles as seed. Trying multiple predefined seeds...")
+        # self.get_logger().warn("IK failed with current joint angles as seed. Trying multiple predefined seeds...")
         
         # Convert target quaternion to RPY for seed generation
         target_rpy_deg = R.from_matrix(target_rot_matrix).as_euler('xyz', degrees=True)
@@ -315,7 +315,7 @@ class ReorientForAssembly(Node):
             np.radians([85, -90, 100, -100, -90, target_rpy_deg[2]]),
         ]
         
-        self.get_logger().info(f"Trying {len(seed_configs)} alternative seed configurations...")
+        # self.get_logger().info(f"Trying {len(seed_configs)} alternative seed configurations...")
         
         best_result = None
         best_cost = float('inf')
@@ -340,12 +340,12 @@ class ReorientForAssembly(Node):
                     
                     # Check if this is a good solution
                     if cost < 0.01:
-                        self.get_logger().info(f"IK succeeded with fallback seed {seed_idx+1}/{len(seed_configs)} (perturbation {i}), cost={cost:.6f}")
+                        # self.get_logger().info(f"IK succeeded with fallback seed {seed_idx+1}/{len(seed_configs)} (perturbation {i}), cost={cost:.6f}")
                         
                         # Verify orientation accuracy
-                        T_result = forward_kinematics(dh_params, result.x)
-                        orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
-                        self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
+                        # T_result = forward_kinematics(dh_params, result.x)
+                        # orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
+                        # self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
                         
                         return result.x
                     
@@ -356,12 +356,12 @@ class ReorientForAssembly(Node):
         
         # If we found any reasonable solution with fallback seeds, use it
         if best_result is not None and best_cost < 0.1:
-            self.get_logger().info(f"Using best fallback IK solution with cost={best_cost:.6f}")
+            # self.get_logger().info(f"Using best fallback IK solution with cost={best_cost:.6f}")
             
             # Verify orientation accuracy
-            T_result = forward_kinematics(dh_params, best_result)
-            orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
-            self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
+            # T_result = forward_kinematics(dh_params, best_result)
+            # orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
+            # self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
             
             return best_result
         
@@ -397,7 +397,7 @@ class ReorientForAssembly(Node):
             This shouldnt be the case ideally- need to fix this after fixing the physics of the object in arm simulation
             and after fixing the real world object pose detection.
         """
-        self.get_logger().info(f"Calculating reorientation for {object_name} relative to {base_name}")
+        # self.get_logger().info(f"Calculating reorientation for {object_name} relative to {base_name}")
         
         # Wait for pose data
         if not self.current_poses or self.current_ee_pose is None:
@@ -434,7 +434,7 @@ class ReorientForAssembly(Node):
         base_current_position, base_current_rpy = self.matrix_to_rpy(T_base_current)
         grasp_position, grasp_rpy = self.matrix_to_rpy(T_grasp)
         
-        self.get_logger().info(f"DEBUG: Grasp transformation: Position={grasp_position} RPY={grasp_rpy}")
+        # self.get_logger().info(f"DEBUG: Grasp transformation: Position={grasp_position} RPY={grasp_rpy}")
         
         # Get target object orientation from JSON (relative to base frame)
         target_euler_relative = self.get_object_target_orientation(object_name)
@@ -466,28 +466,28 @@ class ReorientForAssembly(Node):
         ee_target_position_rpy, ee_target_rpy = self.matrix_to_rpy(T_EE_target)
         object_target_position, object_target_rpy = self.matrix_to_rpy(T_object_target)
         
-        self.get_logger().info(f"DEBUG: Target EE position: {ee_target_position}")
-        self.get_logger().info(f"DEBUG: Target EE quaternion: {ee_target_quat}")
-        self.get_logger().info(f"DEBUG: Target EE RPY: {ee_target_rpy}")
+        # self.get_logger().info(f"DEBUG: Target EE position: {ee_target_position}")
+        # self.get_logger().info(f"DEBUG: Target EE quaternion: {ee_target_quat}")
+        # self.get_logger().info(f"DEBUG: Target EE RPY: {ee_target_rpy}")
         
         # Log the calculations
-        self.get_logger().info("=" * 80)
-        self.get_logger().info("REORIENTATION CALCULATION:")
-        self.get_logger().info("")
-        self.get_logger().info("CURRENT STATE:")
-        self.get_logger().info(f"  Current Base: Position={base_current_position} RPY={base_current_rpy}")
-        self.get_logger().info(f"  Current EE: Position={ee_current_position} RPY={ee_current_rpy}")
-        self.get_logger().info(f"  Current Object: Position={object_current_position} RPY={object_current_rpy}")
-        self.get_logger().info("")
-        self.get_logger().info("TARGET STATE:")
-        self.get_logger().info(f"  Target Object Orientation (from JSON, relative to base): {np.degrees(target_euler_relative)} degrees")
-        self.get_logger().info(f"  Target Object Orientation (world frame): RPY={object_target_rpy}")
-        self.get_logger().info(f"  Target Object: Position={object_target_position} RPY={object_target_rpy}")
-        self.get_logger().info(f"  Calculated Target EE: Position={ee_target_position} RPY={ee_target_rpy}")
-        self.get_logger().info("=" * 80)
+        # self.get_logger().info("=" * 80)
+        # self.get_logger().info("REORIENTATION CALCULATION:")
+        # self.get_logger().info("")
+        # self.get_logger().info("CURRENT STATE:")
+        # self.get_logger().info(f"  Current Base: Position={base_current_position} RPY={base_current_rpy}")
+        # self.get_logger().info(f"  Current EE: Position={ee_current_position} RPY={ee_current_rpy}")
+        # self.get_logger().info(f"  Current Object: Position={object_current_position} RPY={object_current_rpy}")
+        # self.get_logger().info("")
+        # self.get_logger().info("TARGET STATE:")
+        # self.get_logger().info(f"  Target Object Orientation (from JSON, relative to base): {np.degrees(target_euler_relative)} degrees")
+        # self.get_logger().info(f"  Target Object Orientation (world frame): RPY={object_target_rpy}")
+        # self.get_logger().info(f"  Target Object: Position={object_target_position} RPY={object_target_rpy}")
+        # self.get_logger().info(f"  Calculated Target EE: Position={ee_target_position} RPY={ee_target_rpy}")
+        # self.get_logger().info("=" * 80)
         
         # Generate trajectory using current joint angles as seed
-        self.get_logger().info("Generating trajectory using current joint angles as seed...")
+        # self.get_logger().info("Generating trajectory using current joint angles as seed...")
         
         # Read current joint angles
         if self.current_joint_angles is None:
@@ -510,7 +510,7 @@ class ReorientForAssembly(Node):
             self.get_logger().error("Failed to compute IK for target pose")
             return False
         
-        self.get_logger().info(f"Computed joint angles: {computed_joint_angles}")
+        # self.get_logger().info(f"Computed joint angles: {computed_joint_angles}")
         
         # Create trajectory point
         trajectory_points = [{
@@ -520,7 +520,7 @@ class ReorientForAssembly(Node):
         }]
         
         trajectory = {"traj1": trajectory_points}
-        self.get_logger().info("Executing trajectory...")
+        # self.get_logger().info("Executing trajectory...")
         success = self.execute_trajectory(trajectory)
         
         if success:
@@ -528,26 +528,26 @@ class ReorientForAssembly(Node):
             time.sleep(0.5)
             
             # Log final state
-            if object_name in self.current_poses and self.current_ee_pose is not None:
-                T_EE_final = self.pose_to_matrix(self.current_ee_pose.pose)
-                T_object_final = self.transform_to_matrix(self.current_poses[object_name].transform)
-                
-                ee_final_position, ee_final_rpy = self.matrix_to_rpy(T_EE_final)
-                object_final_position, object_final_rpy = self.matrix_to_rpy(T_object_final)
-                
-                self.get_logger().info("")
-                self.get_logger().info("=" * 80)
-                self.get_logger().info("FINAL STATE (after execution):")
-                self.get_logger().info(f"  Final EE: Position={ee_final_position} RPY={ee_final_rpy}")
-                self.get_logger().info(f"  Final Object: Position={object_final_position} RPY={object_final_rpy}")
-                self.get_logger().info("")
-                self.get_logger().info("COMPARISON:")
-                self.get_logger().info(f"  Object Position Change: {object_final_position - object_current_position}")
-                self.get_logger().info(f"  Object Orientation Change: {object_final_rpy - object_current_rpy}")
-                self.get_logger().info(f"  Target Object Orientation: {object_target_rpy}")
-                self.get_logger().info(f"  Final Object Orientation: {object_final_rpy}")
-                self.get_logger().info(f"  Orientation Error: {object_final_rpy - object_target_rpy}")
-                self.get_logger().info("=" * 80)
+            # if object_name in self.current_poses and self.current_ee_pose is not None:
+            #     T_EE_final = self.pose_to_matrix(self.current_ee_pose.pose)
+            #     T_object_final = self.transform_to_matrix(self.current_poses[object_name].transform)
+            #     
+            #     ee_final_position, ee_final_rpy = self.matrix_to_rpy(T_EE_final)
+            #     object_final_position, object_final_rpy = self.matrix_to_rpy(T_object_final)
+            #     
+            #     self.get_logger().info("")
+            #     self.get_logger().info("=" * 80)
+            #     self.get_logger().info("FINAL STATE (after execution):")
+            #     self.get_logger().info(f"  Final EE: Position={ee_final_position} RPY={ee_final_rpy}")
+            #     self.get_logger().info(f"  Final Object: Position={object_final_position} RPY={object_final_rpy}")
+            #     self.get_logger().info("")
+            #     self.get_logger().info("COMPARISON:")
+            #     self.get_logger().info(f"  Object Position Change: {object_final_position - object_current_position}")
+            #     self.get_logger().info(f"  Object Orientation Change: {object_final_rpy - object_current_rpy}")
+            #     self.get_logger().info(f"  Target Object Orientation: {object_target_rpy}")
+            #     self.get_logger().info(f"  Final Object Orientation: {object_final_rpy}")
+            #     self.get_logger().info(f"  Orientation Error: {object_final_rpy - object_target_rpy}")
+            #     self.get_logger().info("=" * 80)
         
         return success
     
@@ -581,7 +581,7 @@ class ReorientForAssembly(Node):
             # Send goal with callback
             self._send_goal_future = self.action_client.send_goal_async(goal)
             self._send_goal_future.add_done_callback(self.goal_response_callback)
-            self.get_logger().info("Executing trajectory...")
+            # self.get_logger().info("Executing trajectory...")
             
             # Wait for completion by spinning
             while rclpy.ok() and not self.trajectory_completed:
@@ -589,7 +589,7 @@ class ReorientForAssembly(Node):
             
             return self.trajectory_success
         except Exception as e:
-            self.get_logger().error(f"❌ Trajectory execution error: {e}")
+            self.get_logger().error(f"Trajectory execution error: {e}")
             self.trajectory_completed = True
             return False
     
@@ -597,12 +597,12 @@ class ReorientForAssembly(Node):
         """Handle goal response from action server"""
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().error("❌ Trajectory goal rejected")
+            self.get_logger().error("Trajectory goal rejected")
             self.trajectory_completed = True
             self.trajectory_success = False
             return
         
-        self.get_logger().info("✅ Trajectory goal accepted, waiting for completion...")
+        # self.get_logger().info("Trajectory goal accepted, waiting for completion...")
         self._get_result_future = goal_handle.get_result_async()
         self._get_result_future.add_done_callback(self.goal_result_callback)
     
@@ -610,10 +610,10 @@ class ReorientForAssembly(Node):
         """Handle goal result from action server"""
         result = future.result()
         if result.status == 4:  # SUCCEEDED
-            self.get_logger().info("✅ Trajectory completed successfully")
+            # self.get_logger().info("Trajectory completed successfully")
             self.trajectory_success = True
         else:
-            self.get_logger().error(f"❌ Trajectory failed with status: {result.status}")
+            self.get_logger().error(f"Trajectory failed with status: {result.status}")
             self.trajectory_success = False
         self.trajectory_completed = True
 
@@ -628,29 +628,29 @@ def main(args=None):
     rclpy.init()
     node = ReorientForAssembly()
     
-    node.get_logger().info("Waiting for action server...")
+    # node.get_logger().info("Waiting for action server...")
     node.action_client.wait_for_server()
-    node.get_logger().info("Action server available!")
+    # node.get_logger().info("Action server available!")
     
     try:
         # Wait for pose data (wait indefinitely until received)
-        node.get_logger().info(f"Waiting for pose data for object: {args.object_name} and base: {args.base_name}")
-        start_time = time.time()
-        last_log_time = start_time
+        # node.get_logger().info(f"Waiting for pose data for object: {args.object_name} and base: {args.base_name}")
+        # start_time = time.time()
+        # last_log_time = start_time
         
         while not node.current_poses or node.current_ee_pose is None:
             rclpy.spin_once(node, timeout_sec=0.1)
             time.sleep(0.1)
             
             # Log every 5 seconds to show we're still waiting
-            current_time = time.time()
-            if current_time - last_log_time >= 5.0:
-                elapsed = current_time - start_time
-                node.get_logger().info(f"Still waiting for pose data... ({elapsed:.1f}s elapsed)")
-                last_log_time = current_time
+            # current_time = time.time()
+            # if current_time - last_log_time >= 5.0:
+            #     elapsed = current_time - start_time
+            #     node.get_logger().info(f"Still waiting for pose data... ({elapsed:.1f}s elapsed)")
+            #     last_log_time = current_time
         
-        elapsed = time.time() - start_time
-        node.get_logger().info(f"Received pose data for {len(node.current_poses)} objects (waited {elapsed:.1f}s)")
+        # elapsed = time.time() - start_time
+        # node.get_logger().info(f"Received pose data for {len(node.current_poses)} objects (waited {elapsed:.1f}s)")
         
         # Execute reorientation
         success = node.reorient_for_target(

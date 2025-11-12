@@ -81,8 +81,8 @@ class TranslateForAssembly(Node):
         self.action_client = ActionClient(self, FollowJointTrajectory, '/scaled_joint_trajectory_controller/follow_joint_trajectory')
         
         self.get_logger().info("TranslateForAssembly node initialized")
-        self.get_logger().info(f"Assembly config loaded with {len(self.assembly_config.get('components', []))} components")
-        self.get_logger().info(f"Hover height set to: {HOVER_HEIGHT}m")
+        # self.get_logger().info(f"Assembly config loaded with {len(self.assembly_config.get('components', []))} components")
+        # self.get_logger().info(f"Hover height set to: {HOVER_HEIGHT}m")
     
     def load_assembly_config(self):
         """Load the assembly configuration from JSON file"""
@@ -177,7 +177,7 @@ class TranslateForAssembly(Node):
     
     def read_current_joint_angles(self):
         """Read current joint angles using ROS2 subscriber"""
-        self.get_logger().info("Reading current joint angles...")
+        # self.get_logger().info("Reading current joint angles...")
         
         # Reset the flag
         self.joint_angles_received = False
@@ -190,8 +190,8 @@ class TranslateForAssembly(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
             timeout_count += 1
             
-            if timeout_count % 10 == 0:  # Log every second
-                self.get_logger().info(f"Waiting for joint angles... ({timeout_count * 0.1:.1f}s)")
+            # if timeout_count % 10 == 0:  # Log every second
+            #     self.get_logger().info(f"Waiting for joint angles... ({timeout_count * 0.1:.1f}s)")
         
         if not self.joint_angles_received:
             self.get_logger().error("Timeout waiting for joint angles message")
@@ -201,7 +201,7 @@ class TranslateForAssembly(Node):
             self.get_logger().error("Joint angles data is None")
             return None
         
-        self.get_logger().info(f"Successfully read joint angles: {self.current_joint_angles}")
+        # self.get_logger().info(f"Successfully read joint angles: {self.current_joint_angles}")
         return self.current_joint_angles.copy()
     
     def compute_ik_with_current_seed(self, target_position, target_quat, max_tries=5, dx=0.001):
@@ -232,7 +232,7 @@ class TranslateForAssembly(Node):
             return None
         
         q_guess = self.current_joint_angles.copy()
-        self.get_logger().info(f"Using current joint angles from joint state as seed: {q_guess}")
+        # self.get_logger().info(f"Using current joint angles from joint state as seed: {q_guess}")
         
         # Try IK with current joint angles and position perturbations
         solution_found = False
@@ -261,12 +261,12 @@ class TranslateForAssembly(Node):
                 
                 # Check if this is a good solution
                 if cost < 0.01:
-                    self.get_logger().info(f"Quaternion-based IK succeeded with current joint angles seed (perturbation {i}), cost={cost:.6f}")
+                    # self.get_logger().info(f"Quaternion-based IK succeeded with current joint angles seed (perturbation {i}), cost={cost:.6f}")
                     
                     # Verify orientation accuracy
-                    T_result = forward_kinematics(dh_params, result.x)
-                    orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
-                    self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
+                    # T_result = forward_kinematics(dh_params, result.x)
+                    # orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
+                    # self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
                     
                     return result.x
                 
@@ -277,17 +277,17 @@ class TranslateForAssembly(Node):
         
         # If we found any reasonable solution, use it
         if best_result is not None and best_cost < 0.1:
-            self.get_logger().info(f"Using best quaternion-based IK solution with cost={best_cost:.6f}")
+            # self.get_logger().info(f"Using best quaternion-based IK solution with cost={best_cost:.6f}")
             
             # Verify orientation accuracy
-            T_result = forward_kinematics(dh_params, best_result)
-            orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
-            self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
+            # T_result = forward_kinematics(dh_params, best_result)
+            # orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
+            # self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
             
             return best_result
         
         # Fallback: Try multiple predefined seeds if current seed failed
-        self.get_logger().warn("IK failed with current joint angles as seed. Trying multiple predefined seeds...")
+        # self.get_logger().warn("IK failed with current joint angles as seed. Trying multiple predefined seeds...")
         
         # Convert target quaternion to RPY for seed generation
         target_rpy_deg = R.from_matrix(target_rot_matrix).as_euler('xyz', degrees=True)
@@ -311,7 +311,7 @@ class TranslateForAssembly(Node):
             np.radians([85, -90, 100, -100, -90, target_rpy_deg[2]]),
         ]
         
-        self.get_logger().info(f"Trying {len(seed_configs)} alternative seed configurations...")
+        # self.get_logger().info(f"Trying {len(seed_configs)} alternative seed configurations...")
         
         best_result = None
         best_cost = float('inf')
@@ -336,12 +336,12 @@ class TranslateForAssembly(Node):
                     
                     # Check if this is a good solution
                     if cost < 0.01:
-                        self.get_logger().info(f"IK succeeded with fallback seed {seed_idx+1}/{len(seed_configs)} (perturbation {i}), cost={cost:.6f}")
+                        # self.get_logger().info(f"IK succeeded with fallback seed {seed_idx+1}/{len(seed_configs)} (perturbation {i}), cost={cost:.6f}")
                         
                         # Verify orientation accuracy
-                        T_result = forward_kinematics(dh_params, result.x)
-                        orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
-                        self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
+                        # T_result = forward_kinematics(dh_params, result.x)
+                        # orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
+                        # self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
                         
                         return result.x
                     
@@ -352,12 +352,12 @@ class TranslateForAssembly(Node):
         
         # If we found any reasonable solution with fallback seeds, use it
         if best_result is not None and best_cost < 0.1:
-            self.get_logger().info(f"Using best fallback IK solution with cost={best_cost:.6f}")
+            # self.get_logger().info(f"Using best fallback IK solution with cost={best_cost:.6f}")
             
             # Verify orientation accuracy
-            T_result = forward_kinematics(dh_params, best_result)
-            orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
-            self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
+            # T_result = forward_kinematics(dh_params, best_result)
+            # orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
+            # self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
             
             return best_result
         
@@ -381,7 +381,7 @@ class TranslateForAssembly(Node):
             base_name: Name of the base object (e.g., 'base')
             duration: Duration for trajectory execution
         """
-        self.get_logger().info(f"Calculating translation for {object_name} relative to {base_name}")
+        # self.get_logger().info(f"Calculating translation for {object_name} relative to {base_name}")
         
         # Wait for pose data
         if not self.current_poses or self.current_ee_pose is None:
@@ -421,7 +421,7 @@ class TranslateForAssembly(Node):
         base_current_position, base_current_rpy = self.matrix_to_rpy(T_base_current)
         grasp_position, grasp_rpy = self.matrix_to_rpy(T_grasp)
         
-        self.get_logger().info(f"DEBUG: Grasp transformation: Position={grasp_position} RPY={grasp_rpy}")
+        # self.get_logger().info(f"DEBUG: Grasp transformation: Position={grasp_position} RPY={grasp_rpy}")
         
         # Get target object position from JSON (relative to base)
         target_position_relative = self.get_object_target_position(object_name)
@@ -457,20 +457,20 @@ class TranslateForAssembly(Node):
         hover_position[2] = base_current_position[2] + HOVER_HEIGHT
         
         # Log the calculations
-        self.get_logger().info("=" * 80)
-        self.get_logger().info("TRANSLATION CALCULATION:")
-        self.get_logger().info("")
-        self.get_logger().info("CURRENT STATE:")
-        self.get_logger().info(f"  Current EE: Position={ee_current_position} RPY={ee_current_rpy}")
-        self.get_logger().info(f"  Current Object: Position={object_current_position}")
-        self.get_logger().info(f"  Current Base: Position={base_current_position}")
-        self.get_logger().info("")
-        self.get_logger().info("TARGET STATE:")
-        self.get_logger().info(f"  Target Position (relative to base): {target_position_relative}")
-        self.get_logger().info(f"  Target Object Position (absolute): {target_object_position_abs}")
-        self.get_logger().info(f"  Hover Position: {hover_position}")
-        self.get_logger().info(f"  Final Target EE Position: {ee_target_position} RPY={ee_target_rpy}")
-        self.get_logger().info("=" * 80)
+        # self.get_logger().info("=" * 80)
+        # self.get_logger().info("TRANSLATION CALCULATION:")
+        # self.get_logger().info("")
+        # self.get_logger().info("CURRENT STATE:")
+        # self.get_logger().info(f"  Current EE: Position={ee_current_position} RPY={ee_current_rpy}")
+        # self.get_logger().info(f"  Current Object: Position={object_current_position}")
+        # self.get_logger().info(f"  Current Base: Position={base_current_position}")
+        # self.get_logger().info("")
+        # self.get_logger().info("TARGET STATE:")
+        # self.get_logger().info(f"  Target Position (relative to base): {target_position_relative}")
+        # self.get_logger().info(f"  Target Object Position (absolute): {target_object_position_abs}")
+        # self.get_logger().info(f"  Hover Position: {hover_position}")
+        # self.get_logger().info(f"  Final Target EE Position: {ee_target_position} RPY={ee_target_rpy}")
+        # self.get_logger().info("=" * 80)
         
         # Read current joint angles before computing IK
         if self.current_joint_angles is None:
@@ -480,7 +480,7 @@ class TranslateForAssembly(Node):
                 return False
         
         # Step 1: Move to hover position
-        self.get_logger().info("Step 1: Moving to hover position...")
+        # self.get_logger().info("Step 1: Moving to hover position...")
         
         # Compute IK for hover position using current joint angles as seed
         hover_computed_joint_angles = self.compute_ik_with_current_seed(
@@ -494,7 +494,7 @@ class TranslateForAssembly(Node):
             self.get_logger().error("Failed to compute IK for hover position")
             return False
         
-        self.get_logger().info(f"Computed joint angles for hover: {hover_computed_joint_angles}")
+        # self.get_logger().info(f"Computed joint angles for hover: {hover_computed_joint_angles}")
         
         # Create hover trajectory
         hover_trajectory = [{
@@ -508,7 +508,7 @@ class TranslateForAssembly(Node):
             self.get_logger().error("Failed to reach hover position")
             return False
         
-        self.get_logger().info("Reached hover position")
+        # self.get_logger().info("Reached hover position")
         time.sleep(0.5)
         
         # Update current joint angles after hover movement
@@ -520,7 +520,7 @@ class TranslateForAssembly(Node):
                 return False
         
         # Step 2: Move down to final position
-        self.get_logger().info("Step 2: Moving down to final position...")
+        # self.get_logger().info("Step 2: Moving down to final position...")
         
         # Compute IK for final position using current joint angles as seed
         final_computed_joint_angles = self.compute_ik_with_current_seed(
@@ -534,7 +534,7 @@ class TranslateForAssembly(Node):
             self.get_logger().error("Failed to compute IK for final position")
             return False
         
-        self.get_logger().info(f"Computed joint angles for final: {final_computed_joint_angles}")
+        # self.get_logger().info(f"Computed joint angles for final: {final_computed_joint_angles}")
         
         # Create final trajectory
         final_trajectory = [{
@@ -550,25 +550,25 @@ class TranslateForAssembly(Node):
             time.sleep(0.5)
             
             # Log final state
-            if object_name in self.current_poses and self.current_ee_pose is not None:
-                T_EE_final = self.pose_to_matrix(self.current_ee_pose.pose)
-                T_object_final = self.transform_to_matrix(self.current_poses[object_name].transform)
-                
-                ee_final_position, ee_final_rpy = self.matrix_to_rpy(T_EE_final)
-                object_final_position, object_final_rpy = self.matrix_to_rpy(T_object_final)
-                
-                self.get_logger().info("")
-                self.get_logger().info("=" * 80)
-                self.get_logger().info("FINAL STATE (after execution):")
-                self.get_logger().info(f"  Final EE: Position={ee_final_position} RPY={ee_final_rpy}")
-                self.get_logger().info(f"  Final Object: Position={object_final_position}")
-                self.get_logger().info("")
-                self.get_logger().info("COMPARISON:")
-                self.get_logger().info(f"  Object Position Change: {object_final_position - object_current_position}")
-                self.get_logger().info(f"  Target Object Position: {target_object_position_abs}")
-                self.get_logger().info(f"  Final Object Position: {object_final_position}")
-                self.get_logger().info(f"  Position Error: {object_final_position - target_object_position_abs}")
-                self.get_logger().info("=" * 80)
+            # if object_name in self.current_poses and self.current_ee_pose is not None:
+            #     T_EE_final = self.pose_to_matrix(self.current_ee_pose.pose)
+            #     T_object_final = self.transform_to_matrix(self.current_poses[object_name].transform)
+            #     
+            #     ee_final_position, ee_final_rpy = self.matrix_to_rpy(T_EE_final)
+            #     object_final_position, object_final_rpy = self.matrix_to_rpy(T_object_final)
+            #     
+            #     self.get_logger().info("")
+            #     self.get_logger().info("=" * 80)
+            #     self.get_logger().info("FINAL STATE (after execution):")
+            #     self.get_logger().info(f"  Final EE: Position={ee_final_position} RPY={ee_final_rpy}")
+            #     self.get_logger().info(f"  Final Object: Position={object_final_position}")
+            #     self.get_logger().info("")
+            #     self.get_logger().info("COMPARISON:")
+            #     self.get_logger().info(f"  Object Position Change: {object_final_position - object_current_position}")
+            #     self.get_logger().info(f"  Target Object Position: {target_object_position_abs}")
+            #     self.get_logger().info(f"  Final Object Position: {object_final_position}")
+            #     self.get_logger().info(f"  Position Error: {object_final_position - target_object_position_abs}")
+            #     self.get_logger().info("=" * 80)
         
         return success
     
@@ -603,13 +603,13 @@ class TranslateForAssembly(Node):
                 self.get_logger().error("Trajectory goal rejected")
                 return False
             
-            self.get_logger().info("Trajectory goal accepted, waiting for completion...")
+            # self.get_logger().info("Trajectory goal accepted, waiting for completion...")
             result_future = goal_handle.get_result_async()
             rclpy.spin_until_future_complete(self, result_future)
             result = result_future.result()
             
             if result.status == 4:  # SUCCEEDED
-                self.get_logger().info("Trajectory completed successfully")
+                # self.get_logger().info("Trajectory completed successfully")
                 return True
             else:
                 self.get_logger().error(f"Trajectory failed with status: {result.status}")
@@ -629,29 +629,29 @@ def main(args=None):
     rclpy.init()
     node = TranslateForAssembly()
     
-    node.get_logger().info("Waiting for action server...")
+    # node.get_logger().info("Waiting for action server...")
     node.action_client.wait_for_server()
-    node.get_logger().info("Action server available!")
+    # node.get_logger().info("Action server available!")
     
     try:
         # Wait for pose data (wait indefinitely until received)
-        node.get_logger().info(f"Waiting for pose data for object: {args.object_name} and base: {args.base_name}")
-        start_time = time.time()
-        last_log_time = start_time
+        # node.get_logger().info(f"Waiting for pose data for object: {args.object_name} and base: {args.base_name}")
+        # start_time = time.time()
+        # last_log_time = start_time
         
         while not node.current_poses or node.current_ee_pose is None:
             rclpy.spin_once(node, timeout_sec=0.1)
             time.sleep(0.1)
             
             # Log every 5 seconds to show we're still waiting
-            current_time = time.time()
-            if current_time - last_log_time >= 5.0:
-                elapsed = current_time - start_time
-                node.get_logger().info(f"Still waiting for pose data... ({elapsed:.1f}s elapsed)")
-                last_log_time = current_time
+            # current_time = time.time()
+            # if current_time - last_log_time >= 5.0:
+            #     elapsed = current_time - start_time
+            #     node.get_logger().info(f"Still waiting for pose data... ({elapsed:.1f}s elapsed)")
+            #     last_log_time = current_time
         
-        elapsed = time.time() - start_time
-        node.get_logger().info(f"Received pose data for {len(node.current_poses)} objects (waited {elapsed:.1f}s)")
+        # elapsed = time.time() - start_time
+        # node.get_logger().info(f"Received pose data for {len(node.current_poses)} objects (waited {elapsed:.1f}s)")
         
         # Execute translation
         success = node.translate_for_target(
