@@ -2674,7 +2674,7 @@ def reorient_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
             "source ~/Desktop/ros2_ws/install/setup.bash",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
-            f"timeout 60 /usr/bin/python3 reorient_for_assembly.py --object-name \"{object_name}\" --base-name \"{base_name}\""
+            f"timeout 90 /usr/bin/python3 reorient_for_assembly.py --object-name \"{object_name}\" --base-name \"{base_name}\""
         ]
         
         cmd = "\n".join(cmd_parts)
@@ -2685,7 +2685,7 @@ def reorient_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
             executable='/bin/bash',
             capture_output=True,
             text=True,
-            timeout=70
+            timeout=100
         )
         
         # Check for error messages in output even if returncode is 0
@@ -2717,7 +2717,7 @@ def reorient_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
     except subprocess.TimeoutExpired:
         return {
             "status": "error",
-            "message": "Reorient for assembly timed out after 60 seconds"
+            "message": "Reorient for assembly timed out after 90 seconds"
         }
     except Exception as e:
         return {
@@ -2741,7 +2741,7 @@ def translate_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
             "source ~/Desktop/ros2_ws/install/setup.bash",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
-            f"timeout 60 /usr/bin/python3 translate_for_assembly.py --object-name \"{object_name}\" --base-name \"{base_name}\""
+            f"timeout 90 /usr/bin/python3 translate_for_assembly.py --object-name \"{object_name}\" --base-name \"{base_name}\""
         ]
         
         cmd = "\n".join(cmd_parts)
@@ -2752,7 +2752,7 @@ def translate_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
             executable='/bin/bash',
             capture_output=True,
             text=True,
-            timeout=70
+            timeout=100
         )
         
         # Check for error messages in output even if returncode is 0
@@ -2784,7 +2784,7 @@ def translate_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
     except subprocess.TimeoutExpired:
         return {
             "status": "error",
-            "message": "Translate for assembly timed out after 60 seconds"
+            "message": "Translate for assembly timed out after 90 seconds"
         }
     except Exception as e:
         return {
