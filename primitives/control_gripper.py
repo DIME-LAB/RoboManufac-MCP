@@ -108,6 +108,18 @@ class GripperController(Node):
     
     def verify_gripper_state(self, initial_value=None):
         """Verify gripper has reached target state using width readings (both sim and real mode)"""
+        # Check current state immediately - if already at target, return success
+        current_value = self.get_current_width(timeout=0.5)
+        if current_value is not None:
+            if self.target_state == "close":
+                if current_value < WIDTH_CLOSE_THRESHOLD:
+                    self.get_logger().info(f"✓ Gripper already closed (width: {current_value:.2f} < {WIDTH_CLOSE_THRESHOLD})")
+                    return True
+            else:  # open or numeric
+                if current_value > WIDTH_OPEN_THRESHOLD:
+                    self.get_logger().info(f"✓ Gripper already open (width: {current_value:.2f} > {WIDTH_OPEN_THRESHOLD})")
+                    return True
+        
         # Wait longer for gripper to physically move (2-3 seconds)
         self.get_logger().info("Waiting for gripper to move...")
         time.sleep(2.0)
