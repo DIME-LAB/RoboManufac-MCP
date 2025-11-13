@@ -411,11 +411,24 @@ class DirectObjectMove(Node):
             # Set object position to grasp point position for distance calculation
             object_position = grasp_point_position
             
-            # Set orientation to face down (roll=0, pitch=180, yaw=0)
-            rpy = [0.0, 180.0, 0.0]
-            
-            self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position} (with calibration offset applied)")
-            self.get_logger().info(f"🎯 Gripper orientation: face down (RPY: [0.0, 180.0, 0.0])")
+            # Try to get object orientation from latest_pose if available
+            if self.latest_pose is not None:
+                # Extract object orientation and align EE with it
+                object_rpy = self.quaternion_to_rpy(
+                    self.latest_pose.pose.orientation.x,
+                    self.latest_pose.pose.orientation.y,
+                    self.latest_pose.pose.orientation.z,
+                    self.latest_pose.pose.orientation.w
+                )
+                # For top-down approach: use object's yaw, pitch=180 (face down), roll=0
+                rpy = [0.0, 180.0, object_rpy[2]]  # Align yaw with object
+                self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position} (with calibration offset applied)")
+                self.get_logger().info(f"🎯 Gripper orientation aligned with object: RPY: [{rpy[0]:.1f}, {rpy[1]:.1f}, {rpy[2]:.1f}] (object yaw: {object_rpy[2]:.1f}°)")
+            else:
+                # Fallback: face down if no object orientation available
+                rpy = [0.0, 180.0, 0.0]
+                self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position} (with calibration offset applied)")
+                self.get_logger().info(f"🎯 Gripper orientation: face down (RPY: [0.0, 180.0, 0.0]) - no object orientation available")
         elif self.latest_pose is not None:
             # Use detected object pose
             # Calculate time delta for Kalman filter
@@ -434,13 +447,20 @@ class DirectObjectMove(Node):
                 
             # Extract filtered position and orientation
             object_position = np.array(filtered_pose[:3])
-            rpy = filtered_pose[3:6].tolist()
+            object_rpy = filtered_pose[3:6].tolist()
             
             # Apply calibration offset to correct systematic detection bias
             object_position[0] += self.calibration_offset_x  # Correct X offset
             object_position[1] += self.calibration_offset_y  # Correct Y offset
             
+            # Align end-effector with object orientation
+            # For top-down approach: use object's yaw to align, pitch=180 (face down), roll=0
+            # This ensures the gripper aligns with the object's orientation while approaching from above
+            rpy = [0.0, 180.0, object_rpy[2]]  # Align yaw with object, face down
+            
             self.get_logger().info(f"🎯 Detected object at ({object_position[0]:.3f}, {object_position[1]:.3f}, {object_position[2]:.3f})")
+            self.get_logger().info(f"🎯 Object orientation (RPY): [{object_rpy[0]:.1f}, {object_rpy[1]:.1f}, {object_rpy[2]:.1f}]°")
+            self.get_logger().info(f"🎯 EE orientation aligned with object (RPY): [{rpy[0]:.1f}, {rpy[1]:.1f}, {rpy[2]:.1f}]°")
         else:
             # No target provided and no object detected
             self.get_logger().warn("No target position provided and no object detected")
