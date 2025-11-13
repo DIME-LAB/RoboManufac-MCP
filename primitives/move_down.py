@@ -53,7 +53,7 @@ except ImportError:
 # =============================================================================
 GRIPPER_FORCE_THRESHOLD = 100.0  # Stop when gripper force exceeds this value (for sim mode)
 FORCE_THRESHOLD = -20.0  # Stop when any axis force exceeds (is less than) -10N (for real mode)
-MOVEMENT_DURATION = 15.0  # Duration for smooth movement in seconds
+MOVEMENT_DURATION = 30.0  # Duration for smooth movement in seconds
 FORCE_CHECK_INTERVAL = 0.02  # Check force every 20ms during movement
 MOVE_DOWN_INCREMENT = 0.4  # Distance to move down per increment in meters
 # =============================================================================

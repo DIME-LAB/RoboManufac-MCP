@@ -315,7 +315,7 @@ class MoveToSafeHeight(Node):
             point = JointTrajectoryPoint(
                 positions=[float(x) for x in joint_angles],
                 velocities=[0.0] * 6,
-                time_from_start=Duration(sec=10)  # 10 seconds movement
+                time_from_start=Duration(sec=30)  # 30 seconds movement
             )
             
             # Create and send trajectory

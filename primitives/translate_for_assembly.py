@@ -364,7 +364,7 @@ class TranslateForAssembly(Node):
         self.get_logger().error("IK failed: couldn't find solution even with multiple seeds")
         return None
     
-    def translate_for_target(self, object_name, base_name, duration=10.0):
+    def translate_for_target(self, object_name, base_name, duration=20.0):
         """
         Calculate and execute EE translation to place object at target position
         
@@ -623,7 +623,7 @@ def main(args=None):
     parser = argparse.ArgumentParser(description='Translate for Assembly - Move object to target position')
     parser.add_argument('--object-name', type=str, required=True, help='Name of the object being held')
     parser.add_argument('--base-name', type=str, required=True, help='Name of the base object')
-    parser.add_argument('--duration', type=float, default=10.0, help='Movement duration in seconds')
+    parser.add_argument('--duration', type=float, default=20.0, help='Movement duration in seconds')
     args = parser.parse_args()
     
     rclpy.init()

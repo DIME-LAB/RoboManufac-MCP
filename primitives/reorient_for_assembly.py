@@ -368,7 +368,7 @@ class ReorientForAssembly(Node):
         self.get_logger().error("IK failed: couldn't find solution even with multiple seeds")
         return None
     
-    def reorient_for_target(self, object_name, base_name, duration=15.0):
+    def reorient_for_target(self, object_name, base_name, duration=20.0):
         """
         Calculate and execute EE reorientation to achieve target object orientation
         
@@ -622,7 +622,7 @@ def main(args=None):
     parser = argparse.ArgumentParser(description='Reorient for Assembly - ONLY changes orientation, keeps position')
     parser.add_argument('--object-name', type=str, required=True, help='Name of the object to reorient')
     parser.add_argument('--base-name', type=str, required=True, help='Name of the base object (for orientation reference)')
-    parser.add_argument('--duration', type=float, default=15.0, help='Movement duration in seconds')
+    parser.add_argument('--duration', type=float, default=20.0, help='Movement duration in seconds')
     args = parser.parse_args()
     
     rclpy.init()
