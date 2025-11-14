@@ -135,7 +135,7 @@ class PoseKalmanFilter:
         return self.x[:6], self.x[6:12]
 
 class DirectObjectMove(Node):
-    def __init__(self, topic_name=None, object_name="blue_dot_0", height=None, movement_duration=10.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None, offset=None, mode='real'):
+    def __init__(self, topic_name=None, object_name="blue_dot_0", height=None, movement_duration=15.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None, offset=None, mode='real'):
         super().__init__('direct_object_move')
         
         self.mode = mode  # 'sim' or 'real'
@@ -157,11 +157,24 @@ class DirectObjectMove(Node):
         self.last_target_pose = None
         self.position_threshold = 0.005  # 5mm
         self.angle_threshold = 2.0       # 2 degrees
-        # Calibration offset to correct systematic detection bias
-        self.calibration_offset_x = -0.0  # -0mm correction (move left)
-        self.calibration_offset_y = -0.0  # +0mm correction (move forward)
-        # Object to end-effector offset distance (maintain this distance from object/grasp point)
-        self.object_to_ee_offset = offset if offset is not None else 0.123  # Default: 0.123m = 12.3cm
+        # Note: Calibration offsets are only for Z, not X and Y
+        
+        # TCP to gripper center offset distance (from TCP to gripper center along gripper Z-axis)
+        # This implements a spherical flexure joint concept (same as URSim TCP control):
+        # - The offset point (gripper center) acts as a fixed point in space
+        # - When rotating the gripper, TCP moves to keep the offset point fixed
+        # - offset_point = tcp_position + tcp_to_gripper_center_offset * z_axis_gripper
+        # - tcp_position = offset_point - tcp_to_gripper_center_offset * z_axis_gripper
+        self.tcp_to_gripper_center_offset = 0.24  # 0.24m = 24cm (distance from TCP to gripper center)
+        
+        # Offset from target object to gripper center (grasp candidate position to gripper center)
+        # This is the distance from object/grasp point to gripper center
+        # Gripper center = object_position - offset (below object)
+        # TCP = gripper center + 0.24 (above gripper center)
+        # So: TCP = object - offset + 0.24 = object + (0.24 - offset)
+        # Example: offset=0.123 -> gripper_center = object - 0.123, TCP = object - 0.123 + 0.24 = object + 0.117
+        # When offset increases, gripper center moves further down, TCP moves down
+        self.object_to_gripper_center_offset = offset if offset is not None else 0.123  # Default: 0.123m = 12.3cm
         
         # Initialize Kalman filter
         self.kalman_filter = PoseKalmanFilter(process_noise=0.005, measurement_noise=0.05)
@@ -226,12 +239,39 @@ class DirectObjectMove(Node):
             if self.grasp_id is not None:
                 self.get_logger().warn(f"⚠️ Grasp point mode requested but GraspPointArray not available. Falling back to object center.")
         
-        # Add timer to control update frequency (every 2 seconds = 0.5Hz)
-        self.update_timer = self.create_timer(3.0, self.timer_callback)
+        # Add timer to control update frequency
+        # For real mode visual servoing: faster updates (1.5s), for sim mode: slower (3.0s)
+        timer_period = 1.5 if mode == 'real' else 3.0
+        self.update_timer = self.create_timer(timer_period, self.timer_callback)
         self.latest_pose = None
         self.movement_completed = False  # Flag to track if movement has been completed
         self.should_exit = False  # Flag to control exit
         self.trajectory_in_progress = False  # Flag to track if trajectory is executing
+        
+        # Visual servoing variables (for real mode continuous tracking)
+        self.stable_count = 0  # Count consecutive stable readings
+        self.stable_threshold = 3  # Exit after N consecutive stable readings
+        self.current_goal_handle = None  # Store current goal handle for potential cancellation
+        self.convergence_distance_threshold = 0.02  # 2cm - stop when within this distance of target
+        self.convergence_stable_count = 0  # Count stable readings when within convergence distance
+        self.convergence_stable_threshold = 2  # Need 2 stable readings within convergence distance
+        
+        # Tracking loss recovery variables (for real mode)
+        self.tracking_lost_count = 0  # Count consecutive frames without detection
+        self.max_tracking_lost = 3  # Max consecutive lost detections before recovery
+        self.last_known_object_position = None  # Store last known good position
+        self.last_known_object_rpy = None  # Store last known good orientation
+        self.recovery_mode = False  # Flag to indicate we're in recovery mode
+        self.recovery_backoff_distance = 0.05  # Move back 5cm when tracking lost
+        self.recovery_slowdown_factor = 2.0  # Slow down movement by this factor during recovery
+        self.waiting_at_last_known = False  # Flag to indicate we've moved to last known location and are waiting
+        self.last_known_target_sent = False  # Flag to track if we've sent trajectory to last known location
+        
+        # Z position smoothing after recovery (to prevent height jumps)
+        self.smoothed_object_z = None  # Smoothed Z position to prevent jumps after recovery
+        self.z_smoothing_alpha = 0.3  # Smoothing factor (0.0 = no change, 1.0 = immediate update)
+        self.recovery_z_update_count = 0  # Count updates after recovery
+        self.recovery_z_smoothing_steps = 5  # Number of steps to smooth Z after recovery
         
         # Action client for trajectory execution
         self.action_client = ActionClient(
@@ -244,7 +284,8 @@ class DirectObjectMove(Node):
         if height is not None:
             self.get_logger().info(f"📏 Target height: {height}m (offset will be ignored)")
         else:
-            self.get_logger().info(f"📏 Using {self.object_to_ee_offset*100:.1f}cm offset from object/grasp point")
+            self.get_logger().info(f"📏 Using {self.tcp_to_gripper_center_offset*100:.1f}cm TCP to gripper center offset (along gripper Z-axis)")
+            self.get_logger().info(f"📏 Using {self.object_to_gripper_center_offset*100:.1f}cm object to gripper center offset")
         self.get_logger().info(f"⏱️ Movement duration: {movement_duration}s")
         if self.grasp_id is not None:
             self.get_logger().info(f"🎯 Grasp point mode: Using grasp_id {grasp_id} from topic {grasp_points_topic}")
@@ -271,6 +312,64 @@ class DirectObjectMove(Node):
         yaw = math.degrees(math.atan2(siny_cosp, cosy_cosp))
         
         return [roll, pitch, yaw]
+    
+    def compute_offset_point(self, tcp_position, quaternion):
+        """Compute the offset point from TCP position using spherical flexure joint concept
+        (Same as URSim TCP control)
+        
+        The offset vector is defined in the tool frame (gripper frame) and then
+        transformed to world frame using the tool orientation quaternion.
+        
+        Args:
+            tcp_position: TCP position in world frame [x, y, z]
+            quaternion: TCP/tool orientation quaternion [x, y, z, w] (tool frame to world frame)
+        
+        Returns:
+            offset_point: Position of the offset point (gripper center) in world frame [x, y, z]
+        """
+        # Offset vector in tool frame (gripper frame): [0, 0, offset_distance]
+        # In tool frame, Z-axis points from TCP to gripper center (downward)
+        offset_vector_tool_frame = np.array([0.0, 0.0, self.tcp_to_gripper_center_offset])
+        
+        # Transform offset vector from tool frame to world frame using quaternion
+        # The quaternion represents the rotation from tool frame to world frame
+        r = R.from_quat(quaternion)
+        offset_vector_world = r.apply(offset_vector_tool_frame)
+        
+        # Compute offset point: TCP + offset_vector_world
+        # (going forward from TCP to gripper center along the tool Z-axis)
+        offset_point = np.array(tcp_position) + offset_vector_world
+        
+        return offset_point.tolist()
+    
+    def compute_tcp_from_offset_point(self, offset_point, quaternion):
+        """Compute TCP position from offset point using the gripper orientation
+        
+        The offset is computed along the gripper Z-axis in world frame.
+        The gripper Z-axis is obtained from the quaternion orientation.
+        
+        Args:
+            offset_point: Position of the gripper center (offset point) in world frame [x, y, z]
+            quaternion: Gripper orientation quaternion [x, y, z, w] (gripper frame to world frame)
+                       The quaternion's Z-axis points from TCP to gripper center.
+        
+        Returns:
+            tcp_position: TCP position in world frame [x, y, z]
+        """
+        # Get gripper Z-axis direction in world frame
+        r = R.from_quat(quaternion)
+        gripper_z_axis = r.apply(np.array([0.0, 0.0, 1.0]))  # Gripper Z-axis in world frame
+        gripper_z_axis = gripper_z_axis / np.linalg.norm(gripper_z_axis)  # Normalize
+        
+        # Compute offset vector in world frame
+        # The offset goes from gripper center to TCP, opposite to gripper Z-axis
+        offset_vector_world = -self.tcp_to_gripper_center_offset * gripper_z_axis
+        
+        # Compute TCP position: offset_point + offset_vector_world
+        # (going from gripper center towards TCP, opposite to gripper Z-axis)
+        tcp_position = np.array(offset_point) + offset_vector_world
+        
+        return tcp_position.tolist()
     
     def poses_are_similar(self, position, rpy):
         """Check if pose is similar to last target"""
@@ -364,16 +463,13 @@ class DirectObjectMove(Node):
                 break
         
         if target_grasp_point is not None:
+            # Update grasp point in real-time (like object poses)
             self.selected_grasp_point = target_grasp_point
-            self.get_logger().info(f"🎯 Found grasp point {self.grasp_id} for object '{self.object_name}'")
-            # Unsubscribe after getting the grasp point once (simulation data is accurate)
-            if self.grasp_points_sub is not None:
-                self.destroy_subscription(self.grasp_points_sub)
-                self.grasp_points_sub = None
+            # Don't unsubscribe - keep receiving updates in real-time
         else:
-            # Grasp point not found in this message
-            self.get_logger().warn(f"Grasp point {self.grasp_id} for object '{self.object_name}' not found in current message")
-            self.selected_grasp_point = None
+            # Grasp point not found in this message - keep previous one if available
+            if self.selected_grasp_point is None:
+                self.get_logger().debug(f"Grasp point {self.grasp_id} for object '{self.object_name}' not found in current message")
     
     def ee_pose_callback(self, msg: PoseStamped):
         """Callback for end-effector pose data"""
@@ -381,14 +477,20 @@ class DirectObjectMove(Node):
         self.ee_pose_received = True
     
     def timer_callback(self):
-        """Process pose and perform single direct movement to object"""
+        """Process pose and perform movement to object"""
         if self.movement_completed:
             return
         
-        # Don't send new trajectory if one is already in progress
-        if self.trajectory_in_progress:
-            self.get_logger().debug("Trajectory already in progress, skipping...")
-            return
+        # Different behavior for sim vs real mode
+        if self.mode == 'real':
+            # Real mode: continuous visual servoing - update even if trajectory in progress
+            # This allows for smooth tracking of moving objects
+            pass  # Continue to process and send new trajectory
+        else:
+            # Sim mode: wait for trajectory to complete before sending new one
+            if self.trajectory_in_progress:
+                self.get_logger().debug("Trajectory already in progress, skipping...")
+                return
         
         # Wait for end-effector pose if not received yet
         if not self.ee_pose_received or self.current_ee_pose is None:
@@ -407,15 +509,13 @@ class DirectObjectMove(Node):
             # Use provided target position and orientation
             object_position = np.array(self.target_xyz[:3])  # Take first 3 elements
             
-            # Apply calibration offset to correct systematic detection bias (same as detected objects)
-            object_position[0] += self.calibration_offset_x  # Correct X offset
-            object_position[1] += self.calibration_offset_y  # Correct Y offset
+            # Note: Calibration offsets are only for Z, not X and Y
             
             rpy = self.quaternion_to_rpy(
                 self.target_xyzw[0], self.target_xyzw[1], 
                 self.target_xyzw[2], self.target_xyzw[3]
             )
-            self.get_logger().info(f"🎯 Using provided target position: {object_position} (with calibration offset applied) and orientation: {rpy}")
+            self.get_logger().info(f"🎯 Using provided target position: {object_position} and orientation: {rpy}")
         elif self.selected_grasp_point is not None:
             # Use only grasp point position (ignore orientation)
             grasp_point_position = np.array([
@@ -424,12 +524,25 @@ class DirectObjectMove(Node):
                 self.selected_grasp_point.pose.position.z
             ])
             
-            # Apply calibration offset to correct systematic detection bias
-            grasp_point_position[0] += self.calibration_offset_x  # Correct X offset
-            grasp_point_position[1] += self.calibration_offset_y  # Correct Y offset
+            # Log the exact grasp point being used
+            self.get_logger().info(f"📍 Using grasp point {self.grasp_id} from message: "
+                                  f"x={self.selected_grasp_point.pose.position.x:.6f}, "
+                                  f"y={self.selected_grasp_point.pose.position.y:.6f}, "
+                                  f"z={self.selected_grasp_point.pose.position.z:.6f}")
+            
+            # Note: Calibration offsets are only for Z, not X and Y
             
             # Set object position to grasp point position for distance calculation
             object_position = grasp_point_position
+            
+            # Store last known good position for recovery (real mode)
+            if self.mode == 'real':
+                self.last_known_object_position = object_position.copy()
+                # Reset tracking lost count since we have a detection
+                if self.tracking_lost_count > 0:
+                    self.get_logger().info(f"✅ Tracking recovered after {self.tracking_lost_count} lost frames")
+                self.tracking_lost_count = 0
+                self.recovery_mode = False
             
             # Try to get object orientation from latest_pose if available
             if self.latest_pose is not None:
@@ -440,17 +553,38 @@ class DirectObjectMove(Node):
                     self.latest_pose.pose.orientation.z,
                     self.latest_pose.pose.orientation.w
                 )
+                # TODO: Add gripper orientation control for objects if they are flipped
                 # For top-down approach: use object's yaw, pitch=180 (face down), roll=0
                 rpy = [0.0, 180.0, object_rpy[2]]  # Align yaw with object
-                self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position} (with calibration offset applied)")
+                self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position}")
                 self.get_logger().info(f"🎯 Gripper orientation aligned with object: RPY: [{rpy[0]:.1f}, {rpy[1]:.1f}, {rpy[2]:.1f}] (object yaw: {object_rpy[2]:.1f}°)")
             else:
                 # Fallback: face down if no object orientation available
                 rpy = [0.0, 180.0, 0.0]
-                self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position} (with calibration offset applied)")
+                self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position}")
                 self.get_logger().info(f"🎯 Gripper orientation: face down (RPY: [0.0, 180.0, 0.0]) - no object orientation available")
         elif self.latest_pose is not None:
             # Use detected object pose
+            # Reset tracking lost count since we have a detection
+            was_tracking_lost = False
+            if self.mode == 'real':
+                was_tracking_lost = self.tracking_lost_count > 0 or self.waiting_at_last_known
+                if was_tracking_lost:
+                    self.get_logger().info(f"✅ Tracking recovered after {self.tracking_lost_count} lost frames")
+                    # Reset recovery flags
+                    self.tracking_lost_count = 0
+                    self.recovery_mode = False
+                    self.waiting_at_last_known = False
+                    self.last_known_target_sent = False
+                    # Reset smoothing when tracking is recovered
+                    self.recovery_z_update_count = 0
+                    if self.smoothed_object_z is None and self.last_known_object_position is not None:
+                        # Initialize smoothed Z with last known Z to prevent jump
+                        self.smoothed_object_z = self.last_known_object_position[2]
+                        self.get_logger().info(f"🔄 Initializing Z smoothing with last known Z: {self.smoothed_object_z:.3f}m")
+                else:
+                    self.tracking_lost_count = 0
+            
             # Calculate time delta for Kalman filter
             current_time = self.get_clock().now().nanoseconds / 1e9
             if self.last_update_time is not None:
@@ -469,11 +603,37 @@ class DirectObjectMove(Node):
             object_position = np.array(filtered_pose[:3])
             object_rpy = filtered_pose[3:6].tolist()
             
-            # Apply calibration offset to correct systematic detection bias
-            object_position[0] += self.calibration_offset_x  # Correct X offset
-            object_position[1] += self.calibration_offset_y  # Correct Y offset
+            # Note: Calibration offsets are only for Z, not X and Y
+            
+            # Smooth Z position after recovery to prevent height jumps
+            if self.mode == 'real' and was_tracking_lost:
+                if self.smoothed_object_z is not None:
+                    # Gradually update Z position after recovery
+                    detected_z = object_position[2]
+                    # Use exponential smoothing to gradually transition to new Z
+                    self.smoothed_object_z = (self.z_smoothing_alpha * detected_z + 
+                                              (1.0 - self.z_smoothing_alpha) * self.smoothed_object_z)
+                    object_position[2] = self.smoothed_object_z
+                    self.recovery_z_update_count += 1
+                    
+                    if self.recovery_z_update_count < self.recovery_z_smoothing_steps:
+                        self.get_logger().info(f"🔄 Smoothing Z after recovery: detected={detected_z:.3f}m, smoothed={self.smoothed_object_z:.3f}m "
+                                              f"({self.recovery_z_update_count}/{self.recovery_z_smoothing_steps})")
+                    else:
+                        # Done smoothing, use detected Z directly
+                        self.smoothed_object_z = None
+                        self.get_logger().info(f"✅ Z smoothing complete, using detected Z: {detected_z:.3f}m")
+                else:
+                    # First detection after recovery, initialize smoothed Z
+                    self.smoothed_object_z = object_position[2]
+            
+            # Store last known good position for recovery
+            if self.mode == 'real':
+                self.last_known_object_position = object_position.copy()
+                self.last_known_object_rpy = object_rpy.copy()
             
             # Align end-effector with object orientation
+            # TODO: Add gripper orientation control for objects if they are flipped
             # For top-down approach: use object's yaw to align, pitch=180 (face down), roll=0
             # This ensures the gripper aligns with the object's orientation while approaching from above
             rpy = [0.0, 180.0, object_rpy[2]]  # Align yaw with object, face down
@@ -483,8 +643,45 @@ class DirectObjectMove(Node):
             self.get_logger().info(f"🎯 EE orientation aligned with object (RPY): [{rpy[0]:.1f}, {rpy[1]:.1f}, {rpy[2]:.1f}]°")
         else:
             # No target provided and no object detected
-            self.get_logger().warn("No target position provided and no object detected")
-            return
+            if self.mode == 'real' and self.last_known_object_position is not None:
+                # Real mode: handle tracking loss
+                self.tracking_lost_count += 1
+                self.get_logger().warn(f"⚠️ Tracking lost! (consecutive misses: {self.tracking_lost_count}/{self.max_tracking_lost})")
+                
+                if self.tracking_lost_count >= self.max_tracking_lost:
+                    # Move to last known location and wait
+                    if not self.waiting_at_last_known:
+                        self.waiting_at_last_known = True
+                        self.recovery_mode = True
+                        self.get_logger().warn(f"🔄 Moving to last known location and waiting for tracking recovery...")
+                    
+                    # Use last known position
+                    object_position = self.last_known_object_position.copy()
+                    object_rpy = self.last_known_object_rpy.copy()
+                    rpy = [0.0, 180.0, object_rpy[2]]
+                    
+                    # Only send trajectory once to last known location
+                    if not self.last_known_target_sent:
+                        self.get_logger().info(f"📍 Moving to last known position: ({object_position[0]:.3f}, {object_position[1]:.3f}, {object_position[2]:.3f})")
+                        # Continue to calculate and send trajectory (will be sent once)
+                    else:
+                        # Already sent trajectory to last known location, just wait
+                        self.get_logger().info("⏸️ Waiting at last known location for tracking recovery...")
+                        return  # Don't send new trajectories, just wait
+                else:
+                    # Not enough consecutive misses yet, use last known position
+                    if self.last_known_object_position is not None:
+                        object_position = self.last_known_object_position.copy()
+                        object_rpy = self.last_known_object_rpy.copy()
+                        rpy = [0.0, 180.0, object_rpy[2]]
+                        self.get_logger().warn(f"⚠️ Using last known position (miss {self.tracking_lost_count}/{self.max_tracking_lost})")
+                    else:
+                        self.get_logger().warn("No target position provided and no object detected, and no last known position")
+                        return
+            else:
+                # Sim mode or no last known position: just return
+                self.get_logger().warn("No target position provided and no object detected")
+                return
         
         # Calculate direction vector from object to current end-effector
         direction_vector = current_ee_position - object_position
@@ -494,56 +691,169 @@ class DirectObjectMove(Node):
         self.get_logger().info(f"📍 Current EE position: ({current_ee_position[0]:.3f}, {current_ee_position[1]:.3f}, {current_ee_position[2]:.3f})")
         self.get_logger().info(f"📍 Object position: ({object_position[0]:.3f}, {object_position[1]:.3f}, {object_position[2]:.3f})")
         
-        # Calculate target end-effector position
-        if self.selected_grasp_point is not None:
-            # For grasp points: place EE above the grasp point (in Z direction)
-            target_ee_position = np.array([
-                object_position[0],
-                object_position[1],
-                object_position[2] + self.object_to_ee_offset
-            ])
-            self.get_logger().info(f"📏 Placing EE {self.object_to_ee_offset*100:.1f}cm above grasp point at Z={target_ee_position[2]:.3f}m")
-        elif self.height is not None:
-            # If height is explicitly specified, use that exact height
+        # Calculate target end-effector position using spherical flexure joint concept
+        # Convert RPY to quaternion for offset calculation
+        r = R.from_euler('xyz', [np.deg2rad(rpy[0]), np.deg2rad(rpy[1]), np.deg2rad(rpy[2])], degrees=False)
+        target_quaternion = r.as_quat()  # [x, y, z, w]
+        
+        if self.height is not None:
+            # If height is explicitly specified, use that exact height (ignore offset)
             target_ee_position = np.array([
                 object_position[0],
                 object_position[1],
                 self.height
             ])
-            self.get_logger().info(f"📏 Using specified height={self.height:.3f}m")
+            self.get_logger().info(f"📏 Using specified height={self.height:.3f}m (offset ignored)")
         else:
-            # Determine approach direction for non-grasp-point cases
-            approach_direction = None
-            if current_distance > 1e-6:
-                # Use direction from object to current EE
-                approach_direction = direction_vector / current_distance
-                self.get_logger().info(f"🎯 Using current EE direction: ({approach_direction[0]:.3f}, {approach_direction[1]:.3f}, {approach_direction[2]:.3f})")
-            else:
-                # Default to upward direction
-                approach_direction = np.array([0.0, 0.0, 1.0])
-                self.get_logger().warn("Current distance is very small, using default upward direction")
+            # Use TCP offset calculation: offset_point is where gripper center should be
+            # For object center mode: offset_point = object_position - object_to_gripper_center_offset in Z
+            # For grasp points: offset_point = grasp_point_position (already at gripper center)
             
-            # Calculate target position by offsetting from object along approach direction
-            target_ee_position = object_position + approach_direction * self.object_to_ee_offset
-            self.get_logger().info(f"📏 Maintaining {self.object_to_ee_offset*100:.1f}cm offset from object")
+            # Calculate positions: Object -> Gripper Center -> TCP
+            # 1. Subtract offset from object Z to get gripper center (offset point) - gripper center is BELOW object
+            # 2. Compute TCP from offset point using quaternion (along gripper Z-axis)
+            # Formula: gripper_center = object - offset, TCP = gripper_center + 0.24 = object - offset + 0.24
+            
+            # First calculate gripper center (offset point) - gripper center is BELOW the object
+            offset_point = object_position.copy()
+            offset_point[2] -= self.object_to_gripper_center_offset  # Gripper center is offset below object
+            
+            # Then calculate TCP position from offset point using quaternion (same as reference)
+            # This uses the gripper Z-axis direction from the quaternion
+            target_tcp_position = self.compute_tcp_from_offset_point(offset_point, target_quaternion)
+            target_ee_position = np.array(target_tcp_position)
+            
+            self.get_logger().info(f"📏 Offset point (gripper center): ({offset_point[0]:.3f}, {offset_point[1]:.3f}, {offset_point[2]:.3f})")
+            self.get_logger().info(f"📏 TCP to gripper center offset: {self.tcp_to_gripper_center_offset*100:.1f}cm (vertical, world Z-axis)")
+            self.get_logger().info(f"🎯 Target TCP position: ({target_ee_position[0]:.3f}, {target_ee_position[1]:.3f}, {target_ee_position[2]:.3f})")
         
-        # Verify the target distance
-        calculated_distance = np.linalg.norm(target_ee_position - object_position)
-        self.get_logger().info(f"✅ Calculated target distance: {calculated_distance*100:.2f} cm")
+        # Verify the target distance (from TCP to offset point)
+        if self.height is None:
+            # Simple vertical offset verification (no quaternion needed)
+            calculated_distance = abs(target_ee_position[2] - offset_point[2])
+            self.get_logger().info(f"✅ Calculated distance from TCP to offset point: {calculated_distance*100:.2f} cm")
+            
+            # Verify the offset matches expected value
+            expected_distance = self.tcp_to_gripper_center_offset
+            distance_error = abs(calculated_distance - expected_distance)
+            if distance_error > 0.001:  # 1mm tolerance
+                self.get_logger().warn(f"⚠️ TCP offset verification error: {distance_error*1000:.2f}mm (expected {expected_distance*100:.1f}cm, got {calculated_distance*100:.1f}cm)")
+            else:
+                self.get_logger().info(f"✅ TCP offset verification passed: {calculated_distance*100:.1f}cm (error = {distance_error*1000:.3f}mm)")
+        else:
+            # For explicit height, just show distance to object
+            calculated_distance = np.linalg.norm(target_ee_position - object_position)
+            self.get_logger().info(f"✅ Calculated target distance: {calculated_distance*100:.2f} cm")
         
         self.get_logger().info(f"🎯 Final target EE position: ({target_ee_position[0]:.3f}, {target_ee_position[1]:.3f}, {target_ee_position[2]:.3f})")
+        
+        # For real mode visual servoing: check convergence based on distance and stability
+        if self.mode == 'real':
+            # Step 1: Verify TCP position (3D distance to target TCP)
+            distance_to_target_tcp = np.linalg.norm(current_ee_position - target_ee_position)
+            tcp_within_convergence = distance_to_target_tcp <= self.convergence_distance_threshold
+            
+            # Step 2: Verify X,Y alignment with object/grasp point
+            # For grasp points: use original grasp point position (before calibration offset)
+            # For object center: use object_position (which may have calibration offset applied)
+            if self.selected_grasp_point is not None:
+                # Use original grasp point position for X,Y verification
+                grasp_point_for_xy_check = np.array([
+                    self.selected_grasp_point.pose.position.x,
+                    self.selected_grasp_point.pose.position.y
+                ])
+                xy_distance_to_object = np.linalg.norm(current_ee_position[:2] - grasp_point_for_xy_check)
+                # Log the grasp point being used for verification
+                self.get_logger().info(f"🔍 XY convergence check: EE=({current_ee_position[0]:.3f}, {current_ee_position[1]:.3f}), "
+                                      f"GraspPoint=({grasp_point_for_xy_check[0]:.3f}, {grasp_point_for_xy_check[1]:.3f}), "
+                                      f"Distance={xy_distance_to_object*100:.2f}cm")
+            else:
+                # Use object position for X,Y verification
+                xy_distance_to_object = np.linalg.norm(current_ee_position[:2] - object_position[:2])
+            xy_within_convergence = xy_distance_to_object <= self.convergence_distance_threshold
+            
+            # Check if pose has changed significantly (only X, Y, yaw - Z changes are expected as detection improves)
+            target_pose_tuple = (target_ee_position.tolist(), rpy)
+            pose_is_similar = self.poses_are_similar(target_ee_position.tolist(), rpy)
+            
+            # Both conditions must be met for convergence
+            within_convergence_distance = tcp_within_convergence and xy_within_convergence
+            
+            if within_convergence_distance:
+                # Both TCP and X,Y are within convergence - check if stable
+                if pose_is_similar:
+                    self.convergence_stable_count += 1
+                    self.get_logger().info(f"🎯 Within convergence distance (TCP 3D: {distance_to_target_tcp*100:.1f}cm, XY to object: {xy_distance_to_object*100:.1f}cm) and stable "
+                                          f"(stable {self.convergence_stable_count}/{self.convergence_stable_threshold})")
+                    
+                    # Exit if we've been stable within convergence distance for enough readings
+                    if self.convergence_stable_count >= self.convergence_stable_threshold:
+                        self.get_logger().info(f"✅ Successfully converged to target (TCP 3D: {distance_to_target_tcp*100:.1f}cm, XY to object: {xy_distance_to_object*100:.1f}cm). Exiting visual servo.")
+                        self.movement_completed = True
+                        self.should_exit = True
+                        return
+                else:
+                    # Close but target changed - reset convergence stable count
+                    self.convergence_stable_count = 0
+                    self.get_logger().info(f"🎯 Within convergence distance (TCP 3D: {distance_to_target_tcp*100:.1f}cm, XY: {xy_distance_to_object*100:.1f}cm) but target updated")
+            else:
+                # Not yet within convergence distance - reset convergence stable count
+                self.convergence_stable_count = 0
+                
+                # Log which condition is not met
+                if not tcp_within_convergence and not xy_within_convergence:
+                    status_msg = f"TCP 3D: {distance_to_target_tcp*100:.1f}cm, XY: {xy_distance_to_object*100:.1f}cm (both need to be ≤{self.convergence_distance_threshold*100:.1f}cm)"
+                elif not tcp_within_convergence:
+                    status_msg = f"TCP 3D: {distance_to_target_tcp*100:.1f}cm (needs ≤{self.convergence_distance_threshold*100:.1f}cm), XY: {xy_distance_to_object*100:.1f}cm ✓"
+                else:
+                    status_msg = f"TCP 3D: {distance_to_target_tcp*100:.1f}cm ✓, XY: {xy_distance_to_object*100:.1f}cm (needs ≤{self.convergence_distance_threshold*100:.1f}cm)"
+                
+                if pose_is_similar:
+                    # Target is stable but we're not close enough yet - keep tracking
+                    self.stable_count += 1
+                    self.get_logger().info(f"🔄 Tracking: {status_msg}, target stable "
+                                          f"(stable {self.stable_count}/{self.stable_threshold})")
+                else:
+                    # Target changed - reset stable count and continue tracking
+                    self.stable_count = 0
+                    self.get_logger().info(f"🎯 Target updated: {status_msg}, updating trajectory to: "
+                                          f"({target_ee_position[0]:.3f}, {target_ee_position[1]:.3f}, {target_ee_position[2]:.3f})")
+        
+        # If waiting at last known location, mark that we've sent the trajectory
+        if self.waiting_at_last_known and not self.last_known_target_sent:
+            self.last_known_target_sent = True
         
         # Create target pose with calculated position
         target_position = target_ee_position.tolist()
         target_pose = (target_position, rpy)
         
         # Use the calculated z-coordinate (which is either the specified height or the auto-calculated one)
-        trajectory = hover_over_grasp(target_pose, target_ee_position[2], self.movement_duration)
+        # For real mode visual servoing, use shorter duration for smoother tracking
+        # During recovery mode, slow down significantly
+        if self.mode == 'sim':
+            movement_duration = self.movement_duration
+        elif self.recovery_mode:
+            # Recovery mode: slow down significantly to allow better detection
+            movement_duration = min(self.movement_duration * self.recovery_slowdown_factor, 10.0)
+            self.get_logger().info(f"🔄 Recovery mode: using slower movement duration {movement_duration:.1f}s")
+        else:
+            # Real mode: use longer duration for slower, smoother tracking
+            movement_duration = min(self.movement_duration, 12.0)  # Increased from 5.0s to 12.0s for slower movement
+        
+        trajectory = hover_over_grasp(target_pose, target_ee_position[2], movement_duration)
         
         # Execute trajectory
-        self.trajectory_in_progress = True  # Mark trajectory as in progress
+        if self.mode == 'sim':
+            # Sim mode: mark as in progress and wait for completion
+            self.trajectory_in_progress = True
+        # Real mode: don't set trajectory_in_progress flag, allow continuous updates
         self.execute_trajectory(trajectory)
-        # Don't set movement_completed or should_exit here - wait for trajectory completion
+        
+        # Update last target pose for similarity checking
+        self.last_target_pose = (target_ee_position.tolist(), rpy)
+        
+        # For sim mode: don't set movement_completed here - wait for trajectory completion
+        # For real mode: movement_completed is set when stable enough
     
     def execute_trajectory(self, trajectory):
         """Execute trajectory using ROS2 action"""
@@ -551,7 +861,6 @@ class DirectObjectMove(Node):
             if 'traj1' not in trajectory or not trajectory['traj1']:
                 self.get_logger().error("No trajectory found")
                 return
-            
             
             point = trajectory['traj1'][0]
             positions = point['positions']
@@ -575,13 +884,22 @@ class DirectObjectMove(Node):
             goal.trajectory = traj_msg
             goal.goal_time_tolerance = Duration(sec=1)
             
-            self.get_logger().info("Sending trajectory...")
-            self._send_goal_future = self.action_client.send_goal_async(goal)
-            self._send_goal_future.add_done_callback(self.goal_response)
+            # For real mode visual servoing: send goal without waiting for callbacks
+            # This allows continuous updates
+            if self.mode == 'real':
+                self.get_logger().info("Sending trajectory (visual servoing mode)...")
+                self.action_client.send_goal_async(goal)
+                # Don't wait for callbacks in real mode - allow continuous updates
+            else:
+                # Sim mode: use callbacks to track completion
+                self.get_logger().info("Sending trajectory...")
+                self._send_goal_future = self.action_client.send_goal_async(goal)
+                self._send_goal_future.add_done_callback(self.goal_response)
             
         except Exception as e:
             self.get_logger().error(f"❌ Trajectory execution error: {e}")
-            self.trajectory_in_progress = False  # Clear flag on error
+            if self.mode == 'sim':
+                self.trajectory_in_progress = False  # Clear flag on error
             self.movement_completed = True
             self.should_exit = True
 
@@ -601,7 +919,7 @@ class DirectObjectMove(Node):
         self._get_result_future.add_done_callback(self.goal_result)
 
     def goal_result(self, future):
-        """Handle goal result"""
+        """Handle goal result (only used in sim mode)"""
         result = future.result()
         self.trajectory_in_progress = False  # Clear trajectory in progress flag
         
@@ -610,7 +928,7 @@ class DirectObjectMove(Node):
         else:
             self.get_logger().error(f"Trajectory failed with status: {result.status}")
         
-        # Set exit flags after trajectory completes
+        # Set exit flags after trajectory completes (sim mode only)
         self.movement_completed = True
         self.should_exit = True
         self.get_logger().info("✅ Direct movement completed. Exiting.")
@@ -625,8 +943,8 @@ def main(args=None):
                        help='Name of the object to move to (e.g., blue_dot_0, red_dot_0)')
     parser.add_argument('--height', type=float, default=None,
                        help='Hover height in meters (if not specified, will use 5.5cm offset from object/grasp point)')
-    parser.add_argument('--movement-duration', type=float, default=10.0,
-                       help='Duration for the movement in seconds (default: 10.0)')
+    parser.add_argument('--movement-duration', type=float, default=15.0,
+                       help='Duration for the movement in seconds (default: 15.0)')
     parser.add_argument('--target-xyz', type=float, nargs=3, default=None,
                        help='Optional target position [x, y, z] in meters')
     parser.add_argument('--target-xyzw', type=float, nargs=4, default=None,
