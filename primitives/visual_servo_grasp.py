@@ -135,10 +135,18 @@ class PoseKalmanFilter:
         return self.x[:6], self.x[6:12]
 
 class DirectObjectMove(Node):
-    def __init__(self, topic_name="/objects_poses_sim", object_name="blue_dot_0", height=None, movement_duration=10.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None, offset=None):
+    def __init__(self, topic_name=None, object_name="blue_dot_0", height=None, movement_duration=10.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None, offset=None, mode='real'):
         super().__init__('direct_object_move')
         
-        self.topic_name = topic_name
+        self.mode = mode  # 'sim' or 'real'
+        # Set default topic based on mode if not provided
+        if topic_name is None:
+            if mode == 'sim':
+                self.topic_name = "/objects_poses_sim"
+            else:
+                self.topic_name = "/objects_poses_real"
+        else:
+            self.topic_name = topic_name
         self.object_name = object_name
         self.height = height  # None means use offset, otherwise use exact height
         self.movement_duration = movement_duration  # Duration for IK movement
@@ -167,14 +175,29 @@ class DirectObjectMove(Node):
         self.current_ee_pose = None
         self.ee_pose_received = False
         
-        # Subscribe to object poses topic
-        # Use TFMessage (for /objects_poses_real topic which publishes TFMessage)
-        self.pose_sub = self.create_subscription(
-            TFMessage,
-            topic_name,
-            self.tf_message_callback,
-            5  # Lower QoS to reduce update frequency
-        )
+        # Subscribe to object poses topic based on mode
+        if self.mode == 'sim':
+            # Sim mode: use ObjectPoseArray (for /objects_poses_sim topic)
+            if ObjectPoseArray is not None:
+                self.pose_sub = self.create_subscription(
+                    ObjectPoseArray,
+                    self.topic_name,
+                    self.objects_poses_callback,
+                    5  # Lower QoS to reduce update frequency
+                )
+                self.get_logger().info(f"Using SIM mode: subscribed to {self.topic_name} (ObjectPoseArray)")
+            else:
+                self.get_logger().error("ObjectPoseArray not available. Cannot use sim mode.")
+                raise ImportError("ObjectPoseArray not available for sim mode")
+        else:
+            # Real mode: use TFMessage (for /objects_poses_real topic which publishes TFMessage)
+            self.pose_sub = self.create_subscription(
+                TFMessage,
+                self.topic_name,
+                self.tf_message_callback,
+                5  # Lower QoS to reduce update frequency
+            )
+            self.get_logger().info(f"Using REAL mode: subscribed to {self.topic_name} (TFMessage)")
         
         # Subscribe to end-effector pose topic
         qos_profile = QoSProfile(
@@ -188,9 +211,6 @@ class DirectObjectMove(Node):
             self.ee_pose_callback,
             qos_profile
         )
-        
-        # Note: ObjectPoseArray subscription removed - topic publishes TFMessage format
-        # If you need ObjectPoseArray support, use a different topic name
         
         # Subscribe to grasp points topic if grasp_id is provided
         if self.grasp_id is not None and GraspPointArray is not None:
@@ -599,8 +619,8 @@ class DirectObjectMove(Node):
 def main(args=None):
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Direct Object Movement Node')
-    parser.add_argument('--topic', type=str, default="/objects_poses_real", 
-                       help='Topic name for object poses subscription')
+    parser.add_argument('--topic', type=str, default=None, 
+                       help='Topic name for object poses subscription (default: /objects_poses_sim for sim mode, /objects_poses_real for real mode)')
     parser.add_argument('--object-name', type=str, default="fork_orange_scaled70",
                        help='Name of the object to move to (e.g., blue_dot_0, red_dot_0)')
     parser.add_argument('--height', type=float, default=None,
@@ -617,6 +637,8 @@ def main(args=None):
                        help='Specific grasp point ID to use (if provided, will use grasp point instead of object center)')
     parser.add_argument('--offset', type=float, default=None,
                        help='Distance offset from object/grasp point in meters (default: 0.123m = 12.3cm)')
+    parser.add_argument('--mode', type=str, default='real', choices=['sim', 'real'],
+                       help='Mode: "sim" for simulation (uses /objects_poses_sim with ObjectPoseArray), "real" for real robot (uses /objects_poses_real with TFMessage). Default: real')
     
     # Parse arguments from sys.argv if args is None
     if args is None:
@@ -629,7 +651,7 @@ def main(args=None):
                       height=args.height, movement_duration=args.movement_duration,
                       target_xyz=args.target_xyz, target_xyzw=args.target_xyzw,
                       grasp_points_topic=args.grasp_points_topic, grasp_id=args.grasp_id,
-                      offset=args.offset)
+                      offset=args.offset, mode=args.mode)
     
     try:
         while rclpy.ok() and not node.should_exit:
