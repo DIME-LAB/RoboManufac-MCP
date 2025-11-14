@@ -70,6 +70,14 @@ export class MCPClientCLI {
       this.logger.log(`Type your queries or "${EXIT_COMMAND}" to exit\n`, {
         type: 'info',
       });
+      this.logger.log(
+        `\nTesting commands:\n` +
+        `  /token-status or /tokens - Show current token usage\n` +
+        `  /summarize or /summarize-now - Manually trigger summarization\n` +
+        `  /test-mode [threshold] - Enable test mode (default: 5% threshold)\n` +
+        `  /test-mode off - Disable test mode\n`,
+        { type: 'info' },
+      );
       this.logger.log(consoleStyles.separator + '\n', { type: 'info' });
       
       // Wait for MCP client to fully connect before creating readline
@@ -131,6 +139,45 @@ export class MCPClientCLI {
         if (query.toLowerCase() === EXIT_COMMAND) {
           this.logger.log('\nGoodbye! 👋\n', { type: 'warning' });
           break;
+        }
+
+        // Handle special commands for testing
+        if (query.toLowerCase() === '/token-status' || query.toLowerCase() === '/tokens') {
+          const usage = this.client.getTokenUsage();
+          this.logger.log(
+            `\n📊 Token Usage Status:\n` +
+            `  Current: ${usage.current} tokens\n` +
+            `  Limit: ${usage.limit} tokens\n` +
+            `  Usage: ${usage.percentage}%\n` +
+            `  Status: ${usage.suggestion}\n` +
+            `  Messages: ${this.client['messages'].length}\n`,
+            { type: 'info' },
+          );
+          continue;
+        }
+
+        if (query.toLowerCase() === '/summarize' || query.toLowerCase() === '/summarize-now') {
+          this.logger.log('\n🔧 Manually triggering summarization...\n', { type: 'info' });
+          await this.client.manualSummarize();
+          const usage = this.client.getTokenUsage();
+          this.logger.log(
+            `\n📊 Token Usage After Summarization:\n` +
+            `  Current: ${usage.current} tokens\n` +
+            `  Usage: ${usage.percentage}%\n`,
+            { type: 'info' },
+          );
+          continue;
+        }
+
+        if (query.toLowerCase().startsWith('/test-mode')) {
+          const parts = query.split(' ');
+          if (parts.length > 1 && parts[1] === 'off') {
+            this.client.setTestMode(false);
+          } else {
+            const threshold = parts.length > 1 ? parseFloat(parts[1]) : 5;
+            this.client.setTestMode(true, threshold);
+          }
+          continue;
         }
 
         await this.client.processQuery(query);

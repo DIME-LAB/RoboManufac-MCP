@@ -153,6 +153,48 @@ You can also edit this file directly if you prefer:
 }
 ```
 
+### Automatic Context Summarization
+
+The client automatically manages conversation context to prevent hitting token limits during long conversations. When the context window approaches 80% capacity (160,000 tokens for Claude models), the client will:
+
+- Automatically summarize older conversation history
+- Preserve the most recent messages (default: last 10 messages)
+- Compress old messages into a concise summary
+- Continue the conversation seamlessly
+
+**Features:**
+- Real-time token tracking using `tiktoken`
+- Model-specific context windows (200k tokens for Claude models)
+- Configurable summarization threshold (default: 80%)
+- Automatic token counting for all messages (user, assistant, tool results)
+
+**Testing Commands:**
+
+While in the interactive CLI, you can use these special commands to test and debug the summarization feature:
+
+- `/token-status` or `/tokens` - Show current token usage statistics
+- `/summarize` or `/summarize-now` - Manually trigger summarization (useful for testing)
+- `/test-mode [percentage]` - Enable test mode with lower threshold (e.g., `/test-mode 5` triggers at 5% = 10,000 tokens)
+- `/test-mode off` - Disable test mode and reset to default 80% threshold
+
+**Example:**
+```bash
+You: /token-status
+Token Usage Status:
+  Current: 23309 tokens
+  Limit: 200000 tokens
+  Usage: 11.65%
+  Status: continue
+  Messages: 15
+
+You: /test-mode 5
+Test mode enabled: Summarization will trigger at 5% (10000 tokens)
+
+You: /summarize
+Manually triggering summarization...
+Conversation summarized. Context reduced from 12 to 1 summary message.
+```
+
 ## How to develop
 
 1. Clone the repository
