@@ -13,7 +13,7 @@ Usage:
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String, Float64
+from std_msgs.msg import String, Float64, Float32
 import argparse
 import time
 import sys
@@ -55,9 +55,9 @@ class GripperController(Node):
             )
             self.get_logger().info("Using SIM mode: monitoring /gripper_width_sim")
         else:
-            # Real mode: use gripper width
+            # Real mode: use gripper width (Float32)
             self.width_sub = self.create_subscription(
-                Float64,
+                Float32,
                 '/gripper_width',
                 self.width_callback,
                 10
