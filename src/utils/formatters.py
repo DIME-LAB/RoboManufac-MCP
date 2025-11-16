@@ -34,16 +34,31 @@ def format_todo(todo: Todo) -> str:
     Returns:
         A markdown-formatted string representation
     """
-    status_emoji = '✅' if todo.completed else '⏳'
+    # Determine status emoji
+    if todo.completed:
+        status_emoji = '✅'
+    elif todo.skipped:
+        status_emoji = '⏭️'
+    else:
+        status_emoji = '⏳'
     
     # Parse ISO timestamps and format them
     created_at = datetime.fromisoformat(todo.created_at.replace('Z', '+00:00') if 'Z' in todo.created_at else todo.created_at)
     updated_at = datetime.fromisoformat(todo.updated_at.replace('Z', '+00:00') if 'Z' in todo.updated_at else todo.updated_at)
     
+    status_text = ""
+    if todo.completed:
+        status_text = "Status: Completed"
+    elif todo.skipped:
+        status_text = "Status: Skipped"
+    else:
+        status_text = "Status: Active"
+    
     return f"""
 ## {todo.title} {status_emoji}
 
 ID: {todo.id}
+{status_text}
 Created: {created_at.strftime('%Y-%m-%d %H:%M:%S')}
 Updated: {updated_at.strftime('%Y-%m-%d %H:%M:%S')}
 

@@ -27,12 +27,15 @@ class Todo(BaseModel):
     - Timestamps track creation and updates for data lifecycle management
     - Description supports markdown for rich text formatting
     - Completion status is tracked both as a boolean flag and with a timestamp
+    - Skipped status is tracked with a timestamp (can be overwritten by completion)
     """
     id: str
     title: str
     description: str  # Markdown format
     completed: bool  # Computed from completedAt for backward compatibility
     completed_at: Optional[str] = Field(None, alias="completedAt")  # ISO timestamp when completed, None if not completed
+    skipped: bool = False  # Computed from skippedAt
+    skipped_at: Optional[str] = Field(None, alias="skippedAt")  # ISO timestamp when skipped, None if not skipped
     created_at: str = Field(alias="createdAt")
     updated_at: str = Field(alias="updatedAt")
     
@@ -54,6 +57,16 @@ class Todo(BaseModel):
 class CreateTodoSchema(BaseModel):
     title: str = Field(..., min_length=1, description="Title is required")
     description: str = Field(..., min_length=1, description="Description is required")
+
+
+# Schema for creating multiple todos at once
+class CreateTodosSchema(BaseModel):
+    todos: list[CreateTodoSchema] = Field(..., min_items=1, description="List of todos to create (at least one required)")
+
+
+# Schema for skipping todos - accepts one or more IDs
+class SkipTodosSchema(BaseModel):
+    ids: list[str] = Field(..., min_items=1, description="List of todo IDs to skip (at least one required)")
 
 
 # Schema for updating a todo - requires ID, title and description are optional
@@ -109,6 +122,8 @@ def create_todo(data: CreateTodoSchema) -> Todo:
         description=data.description,
         completed=False,
         completed_at=None,
+        skipped=False,
+        skipped_at=None,
         created_at=now,
         updated_at=now
     )

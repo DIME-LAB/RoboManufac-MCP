@@ -6,23 +6,27 @@ A Model Context Protocol (MCP) server that provides a comprehensive API for mana
 
 ## Features
 
-- Create, update, complete, and delete todos
+- Create, update, complete, delete, and skip todos
+- Bulk create multiple todos at once
 - Search todos by title or creation date
 - List active todos and generate summaries
+- Clear entire todo list
 - SQLite database for persistence
 
 ## Tools
 
-1. `create-todo` - Create a new todo item
+1. `create-todo` - Create one or more todo items (single or bulk)
 2. `list-todos` - List all todos
 3. `get-todo` - Get a specific todo by ID
 4. `update-todo` - Update a todo's title or description
 5. `complete-todo` - Mark a todo as completed
 6. `delete-todo` - Delete a todo
-7. `search-todos-by-title` - Search todos by title (case-insensitive)
-8. `search-todos-by-date` - Search todos by creation date (YYYY-MM-DD)
-9. `list-active-todos` - List all non-completed todos
-10. `summarize-active-todos` - Generate a summary of active todos
+7. `skip-todo` - Mark one or more non-completed todos as skipped
+8. `search-todos-by-title` - Search todos by title (case-insensitive)
+9. `search-todos-by-date` - Search todos by creation date (YYYY-MM-DD)
+10. `list-active-todos` - List all non-completed todos
+11. `summarize-active-todos` - Generate a summary of active todos
+12. `clear-todo-list` - Clear all todos from the list
 
 ## Installation
 

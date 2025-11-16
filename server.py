@@ -19,7 +19,6 @@ HOW THE SERVER WORKS:
 4. It handles incoming tool calls from clients (like Claude)
 """
 import asyncio
-import signal
 import sys
 from typing import Any
 
@@ -30,9 +29,11 @@ from mcp.types import Tool, TextContent
 # Import models and schemas
 from src.models.todo import (
     CreateTodoSchema,
+    CreateTodosSchema,
     UpdateTodoSchema,
     CompleteTodoSchema,
     DeleteTodoSchema,
+    SkipTodosSchema,
     SearchTodosByTitleSchema,
     SearchTodosByDateSchema
 )
@@ -106,10 +107,23 @@ async def handle_tool_call(tool_name: str, arguments: dict[str, Any]) -> list[Te
     """Handle all tool calls - routes to appropriate handler based on tool_name"""
     if tool_name == "create-todo":
         try:
-            validated_data = CreateTodoSchema(**arguments)
-            new_todo = todo_service.create_todo(validated_data)
-            result = format_todo(new_todo)
-            return [TextContent(type="text", text=f"✅ Todo Created:\n\n{result}")]
+            # Check if it's a single todo or multiple todos
+            if "todos" in arguments and isinstance(arguments["todos"], list):
+                # Multiple todos
+                validated_data = CreateTodosSchema(**arguments)
+                created_todos = todo_service.create_todos(validated_data.todos)
+                if len(created_todos) == 1:
+                    result = format_todo(created_todos[0])
+                    return [TextContent(type="text", text=f"✅ Todo Created:\n\n{result}")]
+                else:
+                    result = format_todo_list(created_todos)
+                    return [TextContent(type="text", text=f"✅ {len(created_todos)} Todos Created:\n\n{result}")]
+            else:
+                # Single todo (backward compatibility)
+                validated_data = CreateTodoSchema(**arguments)
+                new_todo = todo_service.create_todo(validated_data)
+                result = format_todo(new_todo)
+                return [TextContent(type="text", text=f"✅ Todo Created:\n\n{result}")]
         except Exception as e:
             return [TextContent(type="text", text=create_error_response(f"Failed to create todo: {str(e)}")["content"][0]["text"])]
     
@@ -207,6 +221,31 @@ async def handle_tool_call(tool_name: str, arguments: dict[str, Any]) -> list[Te
             return [TextContent(type="text", text=create_error_response(result.args[0] if result.args else "Unknown error")["content"][0]["text"])]
         return [TextContent(type="text", text=result)]
     
+    elif tool_name == "skip-todo":
+        try:
+            validated_data = SkipTodosSchema(**arguments)
+            skipped_todos = todo_service.skip_todos(validated_data.ids)
+            if len(skipped_todos) == 0:
+                return [TextContent(type="text", text=create_error_response("No todos were skipped. All specified todos are either already completed or do not exist.")["content"][0]["text"])]
+            elif len(skipped_todos) == 1:
+                result = format_todo(skipped_todos[0])
+                return [TextContent(type="text", text=f"⏭️ Todo Skipped:\n\n{result}")]
+            else:
+                result = format_todo_list(skipped_todos)
+                return [TextContent(type="text", text=f"⏭️ {len(skipped_todos)} Todos Skipped:\n\n{result}")]
+        except Exception as e:
+            return [TextContent(type="text", text=create_error_response(f"Failed to skip todos: {str(e)}")["content"][0]["text"])]
+    
+    elif tool_name == "clear-todo-list":
+        try:
+            count = todo_service.clear_all_todos()
+            if count == 0:
+                return [TextContent(type="text", text="Todo list is already empty. No todos were deleted.")]
+            else:
+                return [TextContent(type="text", text=f"Cleared todo list: {count} todo(s) deleted.")]
+        except Exception as e:
+            return [TextContent(type="text", text=create_error_response(f"Failed to clear todo list: {str(e)}")["content"][0]["text"])]
+    
     else:
         return [TextContent(type="text", text=create_error_response(f"Unknown tool: {tool_name}")["content"][0]["text"])]
 
@@ -218,14 +257,26 @@ async def list_tools_handler() -> list[Tool]:
     return [
         Tool(
             name="create-todo",
-            description="Create a new todo item",
+            description="Create one or more todo items. Accepts either a single todo (title, description) or multiple todos (todos array). For single todo, provide 'title' and 'description'. For multiple todos, provide 'todos' array.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string", "minLength": 1, "description": "Title is required"},
-                    "description": {"type": "string", "minLength": 1, "description": "Description is required"}
-                },
-                "required": ["title", "description"]
+                    "title": {"type": "string", "minLength": 1, "description": "Title for single todo (use with description)"},
+                    "description": {"type": "string", "minLength": 1, "description": "Description for single todo (use with title)"},
+                    "todos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string", "minLength": 1},
+                                "description": {"type": "string", "minLength": 1}
+                            },
+                            "required": ["title", "description"]
+                        },
+                        "minItems": 1,
+                        "description": "Array of todos to create (each with title and description). Use this for multiple todos."
+                    }
+                }
             }
         ),
         Tool(
@@ -239,7 +290,7 @@ async def list_tools_handler() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "Invalid Todo ID"}
+                    "id": {"type": "string", "description": "Todo ID (UUID format)"}
                 },
                 "required": ["id"]
             }
@@ -250,7 +301,7 @@ async def list_tools_handler() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "Invalid Todo ID"},
+                    "id": {"type": "string", "description": "Todo ID (UUID format)"},
                     "title": {"type": "string", "minLength": 1, "description": "Title is required"},
                     "description": {"type": "string", "minLength": 1, "description": "Description is required"}
                 },
@@ -263,7 +314,7 @@ async def list_tools_handler() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "Invalid Todo ID"}
+                    "id": {"type": "string", "description": "Todo ID (UUID format)"}
                 },
                 "required": ["id"]
             }
@@ -274,7 +325,7 @@ async def list_tools_handler() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "Invalid Todo ID"}
+                    "id": {"type": "string", "description": "Todo ID (UUID format)"}
                 },
                 "required": ["id"]
             }
@@ -311,6 +362,27 @@ async def list_tools_handler() -> list[Tool]:
             description="Generate a summary of all active (non-completed) todos",
             inputSchema={"type": "object", "properties": {}}
         ),
+        Tool(
+            name="skip-todo",
+            description="Mark one or more non-completed todos as skipped. Skipped status can be overwritten by completing the todo later.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "description": "List of todo IDs to skip (at least one required, UUID format)"
+                    }
+                },
+                "required": ["ids"]
+            }
+        ),
+        Tool(
+            name="clear-todo-list",
+            description="Clear all todos from the list. This permanently deletes all todos in the database.",
+            inputSchema={"type": "object", "properties": {}}
+        ),
     ]
 
 
@@ -335,18 +407,6 @@ async def main():
     try:
         # Database is automatically initialized when the service is imported
         
-        # Set up graceful shutdown to close the database
-        # 
-        # This ensures data is properly saved when the server is stopped.
-        # Both SIGINT (Ctrl+C) and SIGTERM (kill command) are handled.
-        def shutdown_handler(signum, frame):
-            print('Shutting down...', file=sys.stderr)
-            database_service.close()
-            sys.exit(0)
-        
-        signal.signal(signal.SIGINT, shutdown_handler)
-        signal.signal(signal.SIGTERM, shutdown_handler)
-        
         # Connect to stdio transport
         # 
         # The stdio_server uses standard input/output for communication,
@@ -359,10 +419,13 @@ async def main():
             )
         
         print("Todo MCP Server running on stdio transport", file=sys.stderr)
+    except KeyboardInterrupt:
+        print('Shutting down...', file=sys.stderr)
     except Exception as error:
         print(f"Failed to start Todo MCP Server: {error}", file=sys.stderr)
+    finally:
+        # Always close the database on exit
         database_service.close()
-        sys.exit(1)
 
 
 if __name__ == "__main__":

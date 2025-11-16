@@ -60,11 +60,20 @@ class DatabaseService:
                 title TEXT NOT NULL,
                 description TEXT NOT NULL,
                 completedAt TEXT NULL, -- ISO timestamp, NULL if not completed
+                skippedAt TEXT NULL, -- ISO timestamp, NULL if not skipped
                 createdAt TEXT NOT NULL,
                 updatedAt TEXT NOT NULL
             )
         ''')
         self.db.commit()
+        
+        # Add skippedAt column to existing tables (migration)
+        try:
+            self.db.execute('ALTER TABLE todos ADD COLUMN skippedAt TEXT NULL')
+            self.db.commit()
+        except sqlite3.OperationalError:
+            # Column already exists, ignore
+            pass
     
     def get_db(self) -> sqlite3.Connection:
         """

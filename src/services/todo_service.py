@@ -53,13 +53,14 @@ class TodoService:
         
         # Prepare the SQL statement for inserting a new todo
         db.execute('''
-            INSERT INTO todos (id, title, description, completedAt, createdAt, updatedAt)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO todos (id, title, description, completedAt, skippedAt, createdAt, updatedAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (
             todo.id,
             todo.title,
             todo.description,
             todo.completed_at,
+            todo.skipped_at,
             todo.created_at,
             todo.updated_at
         ))
@@ -67,6 +68,38 @@ class TodoService:
         
         # Return the created todo
         return todo
+    
+    def create_todos(self, todos_data: list) -> list[Todo]:
+        """
+        Create multiple todos at once
+        
+        Args:
+            todos_data: List of validated todo data (title and description)
+        
+        Returns:
+            List of newly created Todos
+        """
+        created_todos = []
+        db = database_service.get_db()
+        
+        for data in todos_data:
+            todo = create_todo(data)
+            db.execute('''
+                INSERT INTO todos (id, title, description, completedAt, skippedAt, createdAt, updatedAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                todo.id,
+                todo.title,
+                todo.description,
+                todo.completed_at,
+                todo.skipped_at,
+                todo.created_at,
+                todo.updated_at
+            ))
+            created_todos.append(todo)
+        
+        db.commit()
+        return created_todos
     
     def get_todo(self, id: str) -> Optional[Todo]:
         """
@@ -177,7 +210,8 @@ class TodoService:
         This method:
         1. Checks if the todo exists
         2. Sets the completedAt timestamp to the current time
-        3. Returns the updated todo
+        3. Clears the skippedAt timestamp (completion overwrites skipped status)
+        4. Returns the updated todo
         
         Args:
             id: The UUID of the todo to complete
@@ -196,16 +230,51 @@ class TodoService:
         
         db = database_service.get_db()
         
-        # Set the completedAt timestamp
+        # Set the completedAt timestamp and clear skippedAt (completion overwrites skipped)
         db.execute('''
             UPDATE todos
-            SET completedAt = ?, updatedAt = ?
+            SET completedAt = ?, skippedAt = NULL, updatedAt = ?
             WHERE id = ?
         ''', (now, now, id))
         db.commit()
         
         # Return the updated todo
         return self.get_todo(id)
+    
+    def skip_todos(self, ids: list[str]) -> list[Todo]:
+        """
+        Mark one or more todos as skipped (only non-completed ones)
+        
+        This method:
+        1. Checks which todos exist and are not completed
+        2. Sets the skippedAt timestamp for those todos
+        3. Returns the list of skipped todos
+        
+        Args:
+            ids: List of UUIDs of todos to skip
+        
+        Returns:
+            List of skipped Todos (only non-completed ones)
+        """
+        from datetime import datetime
+        now = datetime.utcnow().isoformat()
+        
+        skipped_todos = []
+        db = database_service.get_db()
+        
+        for todo_id in ids:
+            todo = self.get_todo(todo_id)
+            # Only skip if todo exists and is not completed
+            if todo and not todo.completed:
+                db.execute('''
+                    UPDATE todos
+                    SET skippedAt = ?, updatedAt = ?
+                    WHERE id = ? AND completedAt IS NULL
+                ''', (now, now, todo_id))
+                skipped_todos.append(self.get_todo(todo_id))
+        
+        db.commit()
+        return skipped_todos
     
     def delete_todo(self, id: str) -> bool:
         """
@@ -225,6 +294,22 @@ class TodoService:
         
         # Check if any rows were affected
         return cursor.rowcount > 0
+    
+    def clear_all_todos(self) -> int:
+        """
+        Clear all todos from the database
+        
+        This method removes all todos from the database permanently.
+        
+        Returns:
+            Number of todos that were deleted
+        """
+        db = database_service.get_db()
+        cursor = db.execute('DELETE FROM todos')
+        db.commit()
+        
+        # Return the number of rows deleted
+        return cursor.rowcount
     
     def search_by_title(self, title: str) -> list[Todo]:
         """
@@ -314,16 +399,34 @@ class TodoService:
         Returns:
             A properly formatted Todo object
         """
-        # SQLite returns rows as tuples: (id, title, description, completedAt, createdAt, updatedAt)
-        return Todo(
-            id=row[0],
-            title=row[1],
-            description=row[2],
-            completed_at=row[3],
-            created_at=row[4],
-            updated_at=row[5],
-            completed=row[3] is not None  # Computed from completedAt
-        )
+        # SQLite returns rows as tuples: (id, title, description, completedAt, skippedAt, createdAt, updatedAt)
+        # Handle both old schema (6 columns) and new schema (7 columns)
+        if len(row) == 6:
+            # Old schema without skippedAt
+            return Todo(
+                id=row[0],
+                title=row[1],
+                description=row[2],
+                completed_at=row[3],
+                skipped_at=None,
+                created_at=row[4],
+                updated_at=row[5],
+                completed=row[3] is not None,
+                skipped=False
+            )
+        else:
+            # New schema with skippedAt
+            return Todo(
+                id=row[0],
+                title=row[1],
+                description=row[2],
+                completed_at=row[3],
+                skipped_at=row[4],
+                created_at=row[5],
+                updated_at=row[6],
+                completed=row[3] is not None,  # Computed from completedAt
+                skipped=row[4] is not None  # Computed from skippedAt
+            )
 
 
 # Create a singleton instance for use throughout the application
