@@ -7,6 +7,9 @@ import { join, dirname, resolve } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { ClaudeProvider } from './providers/claude.js';
+import { OpenAIProvider } from './providers/openai.js';
+import type { ModelProvider } from './model-provider.js';
 
 // Load .env file from mcp-client directory
 const __filename = fileURLToPath(import.meta.url);
@@ -149,16 +152,49 @@ function listServers(config: ClientConfig): void {
   console.log();
 }
 
-// Check for required environment variables
-// Note: Currently defaults to Claude provider, but the codebase now supports provider abstraction
-function checkRequiredEnvVars() {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error(
-      '\x1b[31mError: ANTHROPIC_API_KEY environment variable is required\x1b[0m',
-    );
-    console.error('Please set it before running the CLI:');
-    console.error('  export ANTHROPIC_API_KEY=your_key_here');
+// Check for required environment variables based on provider
+function checkRequiredEnvVars(provider?: string) {
+  const providerName = provider?.toLowerCase() || 'claude';
+  
+  if (providerName === 'openai') {
+    if (!process.env.OPENAI_API_KEY) {
+      console.error(
+        '\x1b[31mError: OPENAI_API_KEY environment variable is required for OpenAI provider\x1b[0m',
+      );
+      console.error('Please set it before running the CLI:');
+      console.error('  export OPENAI_API_KEY=your_key_here');
+      process.exit(1);
+    }
+  } else if (providerName === 'claude') {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      console.error(
+        '\x1b[31mError: ANTHROPIC_API_KEY environment variable is required for Claude provider\x1b[0m',
+      );
+      console.error('Please set it before running the CLI:');
+      console.error('  export ANTHROPIC_API_KEY=your_key_here');
+      process.exit(1);
+    }
+  } else {
+    console.error(`Error: Unknown provider "${providerName}". Available: claude, openai`);
     process.exit(1);
+  }
+}
+
+// Create provider instance based on provider name
+function createProvider(providerName?: string): ModelProvider | undefined {
+  if (!providerName) {
+    return undefined; // Will default to Claude
+  }
+  
+  const name = providerName.toLowerCase();
+  switch (name) {
+    case 'claude':
+      return new ClaudeProvider();
+    case 'openai':
+      return new OpenAIProvider();
+    default:
+      console.error(`Error: Unknown provider "${providerName}". Available: claude, openai`);
+      process.exit(1);
   }
 }
 
@@ -175,6 +211,8 @@ async function main() {
         'add-server': { type: 'string' },
         'remove-server': { type: 'string' },
         'set-default': { type: 'string' },
+        'provider': { type: 'string' },
+        'model': { type: 'string' },
       },
       allowPositionals: true,
     });
@@ -187,12 +225,16 @@ async function main() {
       return;
     }
 
+    // Determine provider early (for env var checks)
+    const providerName = args.values['provider'];
+    const provider = createProvider(providerName);
+
     // Handle add-server, remove-server, set-default (don't need API key)
     if (args.values['add-server'] || args.values['remove-server'] || args.values['set-default']) {
       // These commands don't need API key, continue below
     } else {
       // For actual client usage, require API key
-      checkRequiredEnvVars();
+      checkRequiredEnvVars(providerName);
     }
 
     // Handle add-server command
@@ -278,7 +320,10 @@ async function main() {
         process.exit(1);
       }
 
-      const cli = new MCPClientCLI(serverConfigs);
+      const cli = new MCPClientCLI(serverConfigs, {
+        provider,
+        model: args.values['model'],
+      });
       await cli.start();
       return;
     }
@@ -298,7 +343,10 @@ async function main() {
         process.exit(1);
       }
 
-      const cli = new MCPClientCLI(enabledServers);
+      const cli = new MCPClientCLI(enabledServers, {
+        provider,
+        model: args.values['model'],
+      });
       await cli.start();
       return;
     }
@@ -335,6 +383,9 @@ async function main() {
     const cli = new MCPClientCLI({
       command: serverCommand,
       args: serverArgs,
+    }, {
+      provider,
+      model: args.values['model'],
     });
 
     await cli.start();

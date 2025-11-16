@@ -2,9 +2,17 @@
 // This file defines the interface that all model providers must implement
 // Supports LLMs, VLMs, and other AI model types
 
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: string; // JSON string
+}
+
 export interface Message {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   content: string;
+  tool_call_id?: string; // For OpenAI tool result messages
+  tool_calls?: ToolCall[]; // For assistant messages that contain tool calls (OpenAI-specific)
 }
 
 // Generic Tool interface (provider-agnostic)

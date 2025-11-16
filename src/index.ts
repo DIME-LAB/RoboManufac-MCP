@@ -710,7 +710,7 @@ export class MCPClient {
       
       // Use provider's createMessage if available, otherwise use stream
       let summaryText: string;
-      if (this.modelProvider instanceof ClaudeProvider) {
+      if ((this.modelProvider as any).createMessage) {
         const summaryResponse = await (this.modelProvider as any).createMessage(
           summaryMessages,
           this.model,
@@ -776,18 +776,24 @@ export class MCPClient {
     let currentMessage = '';
     let currentToolName = '';
     let currentToolInputString = '';
+    let currentToolCallId: string | undefined = undefined;
     let assistantMessageAdded = false;
     let stopReason: string | null = null;
+    let messageStarted = false;
+    const toolCalls: Array<{ id?: string; name: string; arguments: string }> = []; // Track all tool calls in this message
 
     this.logger.log(consoleStyles.assistant);
     for await (const chunk of stream) {
       switch (chunk.type) {
         case 'message_start':
           // Reset flags for new message
+          messageStarted = true;
           assistantMessageAdded = false;
           currentMessage = '';
           currentToolName = '';
           currentToolInputString = '';
+          currentToolCallId = undefined;
+          toolCalls.length = 0; // Clear tool calls array
           stopReason = null;
           continue;
 
@@ -797,6 +803,25 @@ export class MCPClient {
         case 'content_block_start':
           if (chunk.content_block?.type === 'tool_use') {
             currentToolName = chunk.content_block.name;
+            currentToolInputString = ''; // Reset for new tool call
+            currentToolCallId = (chunk.content_block as any).id; // Extract tool call ID if present
+            // Track this tool call
+            toolCalls.push({
+              id: currentToolCallId,
+              name: currentToolName,
+              arguments: '',
+            });
+          }
+          // Initialize message start if not already done (for OpenAI compatibility)
+          if (!messageStarted) {
+            messageStarted = true;
+            assistantMessageAdded = false;
+            currentMessage = '';
+            currentToolName = '';
+            currentToolInputString = '';
+            currentToolCallId = undefined;
+            toolCalls.length = 0; // Clear tool calls array
+            stopReason = null;
           }
           break;
 
@@ -807,26 +832,37 @@ export class MCPClient {
           } else if (chunk.delta.type === 'input_json_delta') {
             if (currentToolName && chunk.delta.partial_json) {
               currentToolInputString += chunk.delta.partial_json;
+              // Update the last tool call's arguments
+              if (toolCalls.length > 0) {
+                toolCalls[toolCalls.length - 1].arguments += chunk.delta.partial_json;
+              }
             }
           }
           break;
 
         case 'message_delta':
+          // Track stop reason
+          if (chunk.delta.stop_reason) {
+            stopReason = chunk.delta.stop_reason;
+          }
+          
           // Only add assistant message once when we have content and haven't added it yet
-          if (currentMessage && !assistantMessageAdded) {
+          // Or when we have a stop reason (which means the message is complete)
+          if (!assistantMessageAdded && (currentMessage || stopReason)) {
             const assistantMessage: Message = {
               role: 'assistant',
               content: currentMessage,
+              // Include tool_calls if we have any (for OpenAI compatibility)
+              tool_calls: toolCalls.length > 0 ? toolCalls.map(tc => ({
+                id: tc.id || '',
+                name: tc.name,
+                arguments: tc.arguments,
+              })) : undefined,
             };
             this.messages.push(assistantMessage);
             assistantMessageAdded = true;
             // Count tokens for assistant message
             this.currentTokenCount += this.tokenCounter.countMessageTokens(assistantMessage);
-          }
-
-          // Track stop reason
-          if (chunk.delta.stop_reason) {
-            stopReason = chunk.delta.stop_reason;
           }
 
           if (chunk.delta.stop_reason === 'tool_use') {
@@ -939,9 +975,11 @@ export class MCPClient {
               JSON.stringify(toolResult.content.flatMap((c) => c.text)),
             );
 
+            // For OpenAI, use 'tool' role with tool_call_id; for Claude, use 'user' role
             const toolResultMessage: Message = {
-              role: 'user',
+              role: currentToolCallId ? 'tool' : 'user',
               content: formattedResult,
+              tool_call_id: currentToolCallId,
             };
             this.messages.push(toolResultMessage);
             // Count tokens for tool result message

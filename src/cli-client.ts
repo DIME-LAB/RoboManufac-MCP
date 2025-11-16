@@ -3,6 +3,7 @@ import { ListToolsResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import readline from 'readline/promises';
 import { MCPClient } from './index.js';
 import { consoleStyles, Logger } from './logger.js';
+import type { ModelProvider } from './model-provider.js';
 
 const EXIT_COMMAND = 'exit';
 
@@ -14,13 +15,20 @@ export class MCPClientCLI {
 
   constructor(
     serverConfig: StdioServerParameters | Array<{ name: string; config: StdioServerParameters }>,
+    options?: { provider?: ModelProvider; model?: string },
   ) {
     if (Array.isArray(serverConfig)) {
       // Multiple servers
-      this.client = MCPClient.createMultiServer(serverConfig);
+      this.client = MCPClient.createMultiServer(serverConfig, {
+        provider: options?.provider,
+        model: options?.model,
+      });
     } else {
       // Single server (backward compatibility)
-      this.client = new MCPClient(serverConfig);
+      this.client = new MCPClient(serverConfig, {
+        provider: options?.provider,
+        model: options?.model,
+      });
     }
     this.logger = new Logger({ mode: 'verbose' });
     

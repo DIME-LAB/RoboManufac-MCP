@@ -194,8 +194,9 @@ export class ClaudeProvider implements ModelProvider {
     }));
 
     // Convert generic Message[] to Anthropic format
+    // Claude doesn't support 'tool' role, so convert tool messages to user messages
     const anthropicMessages = messages.map((msg) => ({
-      role: msg.role as 'user' | 'assistant',
+      role: (msg.role === 'tool' ? 'user' : msg.role) as 'user' | 'assistant',
       content: msg.content,
     }));
 
@@ -219,8 +220,10 @@ export class ClaudeProvider implements ModelProvider {
     model: string,
     maxTokens: number,
   ): Promise<{ content: Array<{ type: string; text: string }> }> {
+    // Convert generic Message[] to Anthropic format
+    // Claude doesn't support 'tool' role, so convert tool messages to user messages
     const anthropicMessages = messages.map((msg) => ({
-      role: msg.role as 'user' | 'assistant',
+      role: (msg.role === 'tool' ? 'user' : msg.role) as 'user' | 'assistant',
       content: msg.content,
     }));
 

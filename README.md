@@ -12,29 +12,53 @@ This is a CLI client that can be used to interact with any MCP server and its to
 
 ## Requirements
 
-- **ANTHROPIC_API_KEY** - Get one from [Anthropic](https://console.anthropic.com/) (required for Claude)
+- **ANTHROPIC_API_KEY** - Get one from [Anthropic](https://console.anthropic.com/) (required for Claude provider)
+- **OPENAI_API_KEY** - Get one from [OpenAI](https://platform.openai.com/api-keys) (required for OpenAI provider)
 - Node.js >= v18.0.0
 
 > **Note:** You do NOT need a Neon API key to use this client. The client works with any MCP server. Neon API keys are only required if you specifically want to use the Neon MCP server.
 
 ## How to use
 
+### Provider Selection
+
+The client supports multiple AI model providers. You can select which provider to use via the `--provider` flag:
+
+- `claude` (default) - Uses Anthropic's Claude models
+- `openai` - Uses OpenAI models (GPT-4, GPT-5, etc.)
+
+```bash
+# Use Claude (default)
+npx @neondatabase/mcp-client-cli --server="my-server"
+
+# Use OpenAI
+npx @neondatabase/mcp-client-cli --server="my-server" --provider=openai
+
+# Specify a custom model
+npx @neondatabase/mcp-client-cli --server="my-server" --provider=openai --model="gpt-4o"
+```
+
 ### Quick Start (Single Server)
 
 Use the client with any MCP server:
 
 ```bash
+# For Claude provider
 export ANTHROPIC_API_KEY=your_anthropic_key_here
+
+# For OpenAI provider
+export OPENAI_API_KEY=your_openai_key_here
 
 # Use any MCP server directly
 npx @neondatabase/mcp-client-cli \
   --server-command="npx" \
   --server-args="-y @yourorg/mcp-server start"
 
-# Or use a local server
+# Or use a local server with a specific provider
 npx @neondatabase/mcp-client-cli \
   --server-command="node" \
-  --server-args="/path/to/your-server.js start"
+  --server-args="/path/to/your-server.js start" \
+  --provider=openai
 ```
 
 ### Managing Multiple Servers
@@ -82,8 +106,14 @@ npx @neondatabase/mcp-client-cli --list-servers
 #### Use a Specific Server
 
 ```bash
-# Use a configured server by name
+# Use a configured server by name (with Claude, default)
 npx @neondatabase/mcp-client-cli --server="my-server"
+
+# Use a server with OpenAI provider
+npx @neondatabase/mcp-client-cli --server="my-server" --provider=openai
+
+# Use a server with a specific model
+npx @neondatabase/mcp-client-cli --server="my-server" --provider=openai --model="gpt-5"
 
 # Or use the short form
 npx @neondatabase/mcp-client-cli -s "another-server"
@@ -114,11 +144,17 @@ npx @neondatabase/mcp-client-cli --remove-server="my-server"
 The client supports running multiple MCP servers at the same time, allowing you to use tools from all connected servers in a single session:
 
 ```bash
-# Run all enabled servers from your configuration
+# Run all enabled servers from your configuration (with Claude, default)
 npx @neondatabase/mcp-client-cli --all
+
+# Run all servers with OpenAI provider
+npx @neondatabase/mcp-client-cli --all --provider=openai
 
 # Run specific servers by name
 npx @neondatabase/mcp-client-cli --servers server1 server2 server3
+
+# Run specific servers with a provider and model
+npx @neondatabase/mcp-client-cli --servers server1 server2 --provider=openai --model="gpt-4o"
 ```
 
 **How it works:**
@@ -155,7 +191,7 @@ You can also edit this file directly if you prefer:
 
 ### Automatic Context Summarization
 
-The client automatically manages conversation context to prevent hitting token limits during long conversations. When the context window approaches 80% capacity (160,000 tokens for Claude models), the client will:
+The client automatically manages conversation context to prevent hitting token limits during long conversations. When the context window approaches 80% capacity, the client will:
 
 - Automatically summarize older conversation history
 - Preserve the most recent messages (default: last 10 messages)
@@ -164,9 +200,12 @@ The client automatically manages conversation context to prevent hitting token l
 
 **Features:**
 - Real-time token tracking using `tiktoken`
-- Model-specific context windows (200k tokens for Claude models)
+- Model-specific context windows:
+  - Claude models: 200k tokens (default)
+  - OpenAI models: Varies by model (e.g., GPT-5: 200k tokens, GPT-4o: 128k tokens)
 - Configurable summarization threshold (default: 80%)
 - Automatic token counting for all messages (user, assistant, tool results)
+- Provider-specific token counting algorithms
 
 **Testing Commands:**
 
@@ -360,6 +399,50 @@ You: /prompts-manager
 ```
 
 **Note:** Prompt states persist across all launch modes, similar to tool states.
+
+### Model Providers
+
+The client supports multiple AI model providers, each with their own characteristics:
+
+#### Claude Provider (Default)
+
+- **Provider name:** `claude`
+- **Default model:** `claude-haiku-4-5-20251001`
+- **Context window:** 200,000 tokens
+- **Tool format:** Uses Anthropic's native tool format
+- **Tool results:** Uses `user` role messages for tool results
+
+**Environment Variable:**
+```bash
+export ANTHROPIC_API_KEY=your_anthropic_key_here
+```
+
+#### OpenAI Provider
+
+- **Provider name:** `openai`
+- **Default model:** `gpt-5`
+- **Context window:** Varies by model (GPT-5: 200k, GPT-4o: 128k)
+- **Tool format:** Uses OpenAI's function calling format
+- **Tool results:** Uses `tool` role messages with `tool_call_id`
+
+**Environment Variable:**
+```bash
+export OPENAI_API_KEY=your_openai_key_here
+```
+
+**Usage:**
+```bash
+# Use OpenAI with default model (gpt-5)
+npx @neondatabase/mcp-client-cli --server="my-server" --provider=openai
+
+# Use OpenAI with a specific model
+npx @neondatabase/mcp-client-cli --server="my-server" --provider=openai --model="gpt-4o"
+
+# Use Claude with a specific model
+npx @neondatabase/mcp-client-cli --server="my-server" --provider=claude --model="claude-sonnet-4-20250514"
+```
+
+**Note:** The provider abstraction layer automatically handles differences in API formats, tool calling conventions, and message structures between providers.
 
 ## How to develop
 
