@@ -24,6 +24,7 @@ interface ServerConfig {
 interface ClientConfig {
   servers: Record<string, ServerConfig>;
   defaultServer?: string;
+  toolStates?: Record<string, boolean>;
 }
 
 interface ClaudeDesktopConfig {

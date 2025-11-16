@@ -226,6 +226,105 @@ You: Now assemble 3 line_blue objects
 
 **Note:** Todo server can be disabled in `mcp_config.json` and will be excluded from `--all` servers, but `/todo-on` will still connect to it on-demand.
 
+### Tool Selection Management
+
+Selectively enable or disable tools from all connected servers with persistent state across sessions.
+
+**Commands:**
+- `/tools` or `/tools-select` - Interactive tool selection mode
+- `/tools-enable-all` - Enable all tools from all servers
+- `/tools-disable-all` - Disable all tools from all servers
+- `/tools-list` - List all tools with their enabled/disabled status
+- `/tools-enable-server <server-name>` - Enable all tools from a specific server
+- `/tools-disable-server <server-name>` - Disable all tools from a specific server
+
+**Features:**
+- **Persistent state**: Tool selections are saved to `~/.mcp-client/config.json` and persist across sessions
+- **Works with all launch modes**: Tool states are applied whether using `--all`, `--servers`, or single server mode
+- **New tools default to enabled**: When a new server is added, all its tools are enabled by default
+- **Interactive selection**: Visual interface to toggle individual tools or entire servers
+- **Real-time updates**: Display refreshes immediately after toggling tools
+
+**Interactive Tool Selection:**
+
+When you run `/tools`, you'll see an interactive interface:
+
+```
+🔧 Tool Selection
+Available Servers and Tools:
+
+S1. ✓ [isaac-sim] (5/5 enabled):
+  1. ✓ tool1
+  2. ✓ tool2
+  3. ✓ tool3
+  4. ✓ tool4
+  5. ✓ tool5
+
+S2. ~ [ros-mcp-server] (2/5 enabled):
+  6. ✓ tool1
+  7. ✗ tool2
+  8. ✗ tool3
+  9. ✓ tool4
+  10. ✗ tool5
+
+Commands:
+  Enter numbers separated by commas or ranges (e.g., 1,3,5-8) to toggle tools
+  Enter S + number (e.g., S1, s2) to toggle all tools in a server
+  a or all - Enable all tools
+  n or none - Disable all tools
+  s or save - Save changes and return
+  q or quit - Cancel and return
+```
+
+**Usage Examples:**
+
+```bash
+# List all tools and their status
+You: /tools-list
+
+# Enable all tools
+You: /tools-enable-all
+
+# Disable all tools
+You: /tools-disable-all
+
+# Enable all tools from a specific server
+You: /tools-enable-server isaac-sim
+
+# Disable all tools from a specific server
+You: /tools-disable-server ros-mcp-server
+
+# Interactive selection mode
+You: /tools
+> 1,3,5-8        # Toggle tools 1, 3, and 5 through 8
+> S1             # Toggle all tools in server 1
+> a              # Enable all tools
+> n              # Disable all tools
+> s              # Save and exit
+```
+
+**Configuration:**
+
+Tool states are stored in `~/.mcp-client/config.json`:
+
+```json
+{
+  "servers": {
+    "isaac-sim": {
+      "command": "python",
+      "args": ["/path/to/server.py"]
+    }
+  },
+  "toolStates": {
+    "isaac-sim__tool1": true,
+    "isaac-sim__tool2": false,
+    "ros-mcp-server__tool1": true
+  }
+}
+```
+
+**Note:** Tool states persist across all launch modes. If you disable tools using `--all` mode, those same tools will be disabled when you launch with `--servers` or single server mode.
+
 ## How to develop
 
 1. Clone the repository

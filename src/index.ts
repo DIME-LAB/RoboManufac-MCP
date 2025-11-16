@@ -15,6 +15,7 @@ import { Stream } from '@anthropic-ai/sdk/streaming.mjs';
 import { consoleStyles, Logger, LoggerOptions } from './logger.js';
 import { TokenCounter, SummarizationConfig } from './token-counter.js';
 import { TodoManager } from './todo.js';
+import { ToolManager } from './tool-manager.js';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -51,6 +52,7 @@ export class MCPClient {
   private model: string;
   private todoManager: TodoManager;
   private todoModeInitialized: boolean = false;
+  private toolManager: ToolManager;
 
   constructor(
     serverConfigs: StdioServerParameters | StdioServerParameters[],
@@ -77,6 +79,9 @@ export class MCPClient {
     
     // Initialize todo manager
     this.todoManager = new TodoManager(this.logger);
+    
+    // Initialize tool manager
+    this.toolManager = new ToolManager(this.logger);
   }
 
   // Constructor for multiple named servers
@@ -97,6 +102,7 @@ export class MCPClient {
     client.currentTokenCount = 0;
     client.tokenCounter = new TokenCounter(client.model, options?.summarizationConfig);
     client.todoManager = new TodoManager(client.logger);
+    client.toolManager = new ToolManager(client.logger);
     return client;
   }
 
@@ -223,9 +229,15 @@ export class MCPClient {
       }
     }
 
-    this.tools = allTools;
+    // Update state for new tools (set them to enabled by default)
+    this.toolManager.updateStateForNewTools(allTools);
+
+    // Filter tools based on enabled state
+    const enabledTools = this.toolManager.filterTools(allTools);
+
+    this.tools = enabledTools;
     this.logger.log(
-      `Loaded ${allTools.length} tool(s) from ${this.servers.size} server(s)\n`,
+      `Loaded ${enabledTools.length} enabled tool(s) from ${allTools.length} total tool(s) across ${this.servers.size} server(s)\n`,
       { type: 'info' },
     );
   }
@@ -370,6 +382,123 @@ export class MCPClient {
    */
   isTodoServerConfigured(): boolean {
     return this.todoManager.isConfigured();
+  }
+
+  /**
+   * Get the tool manager instance
+   */
+  getToolManager(): ToolManager {
+    return this.toolManager;
+  }
+
+  /**
+   * Enable all tools from all servers
+   */
+  async enableAllTools(): Promise<void> {
+    // Collect all tools from all servers (re-query to get complete list)
+    const allTools: Tool[] = [];
+    for (const [serverName, connection] of this.servers.entries()) {
+      try {
+        const toolsResults = await connection.client.request(
+          { method: 'tools/list' },
+          ListToolsResultSchema,
+        );
+        
+        const serverTools = toolsResults.tools.map(
+          ({ inputSchema, name, description }) => {
+            const prefixedName = `${serverName}__${name}`;
+            return {
+              name: prefixedName,
+              description: `[${serverName}] ${description}`,
+              input_schema: inputSchema,
+            };
+          },
+        );
+        
+        allTools.push(...serverTools);
+      } catch (error) {
+        // Ignore errors for individual servers
+      }
+    }
+    
+    this.toolManager.enableAllTools(allTools);
+    
+    // Reload tools to apply changes
+    await this.initMCPTools();
+    
+    this.logger.log('\n✓ All tools enabled\n', { type: 'info' });
+  }
+
+  /**
+   * Disable all tools from all servers
+   */
+  async disableAllTools(): Promise<void> {
+    // Collect all tools from all servers (re-query to get complete list)
+    const allTools: Tool[] = [];
+    for (const [serverName, connection] of this.servers.entries()) {
+      try {
+        const toolsResults = await connection.client.request(
+          { method: 'tools/list' },
+          ListToolsResultSchema,
+        );
+        
+        const serverTools = toolsResults.tools.map(
+          ({ inputSchema, name, description }) => {
+            const prefixedName = `${serverName}__${name}`;
+            return {
+              name: prefixedName,
+              description: `[${serverName}] ${description}`,
+              input_schema: inputSchema,
+            };
+          },
+        );
+        
+        allTools.push(...serverTools);
+      } catch (error) {
+        // Ignore errors for individual servers
+      }
+    }
+    
+    this.toolManager.disableAllTools(allTools);
+    
+    // Reload tools to apply changes
+    await this.initMCPTools();
+    
+    this.logger.log('\n✓ All tools disabled\n', { type: 'info' });
+  }
+
+  /**
+   * Enable all tools from a specific server
+   */
+  async enableServerTools(serverName: string): Promise<void> {
+    if (!this.servers.has(serverName)) {
+      throw new Error(`Server "${serverName}" not found`);
+    }
+    
+    const connection = this.servers.get(serverName)!;
+    this.toolManager.enableServerTools(serverName, connection.tools);
+    
+    // Reload tools to apply changes
+    await this.initMCPTools();
+    
+    this.logger.log(`\n✓ All tools from server "${serverName}" enabled\n`, { type: 'info' });
+  }
+
+  /**
+   * Disable all tools from a specific server
+   */
+  async disableServerTools(serverName: string): Promise<void> {
+    if (!this.servers.has(serverName)) {
+      throw new Error(`Server "${serverName}" not found`);
+    }
+    
+    const connection = this.servers.get(serverName)!;
+    this.toolManager.disableServerTools(serverName, connection.tools);
+    
+    // Reload tools to apply changes
+    await this.initMCPTools();
+    
+    this.logger.log(`\n✓ All tools from server "${serverName}" disabled\n`, { type: 'info' });
   }
 
   /**
