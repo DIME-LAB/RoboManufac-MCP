@@ -19,10 +19,9 @@ import time
 import sys
 import threading
 
-# Width thresholds for verification
-WIDTH_OPEN_THRESHOLD = 100.0  # When open, width should be > 100
-WIDTH_CLOSE_THRESHOLD = 20.0  # When closed, width should be < 20
-GRASP_SUCCESS_THRESHOLD = 35.0  # If width is 20-35 when closing, likely grasped an object
+# Gripper range: 0.0 - 110.0mm
+GRIPPER_MIN_WIDTH = 0.0
+GRIPPER_MAX_WIDTH = 110.0
 
 MAX_RETRIES = 3
 RETRY_DELAY = 0.5  # Seconds to wait between retries
@@ -105,82 +104,52 @@ class GripperController(Node):
                 return self.current_width
         return None
     
-    def is_at_target_state(self, width):
-        """Check if gripper width indicates target state has been reached"""
-        if width is None:
+    def has_moved(self, initial_width, current_width, movement_threshold=0.5):
+        """Check if gripper has moved from initial position"""
+        if initial_width is None or current_width is None:
             return False
-        if self.target_state == "close":
-            return width < GRASP_SUCCESS_THRESHOLD
-        else:  # open or numeric
-            return width > WIDTH_OPEN_THRESHOLD
+        return abs(current_width - initial_width) > movement_threshold
     
     def verify_gripper_state(self, initial_value=None):
-        """Verify gripper has reached target state using width readings"""
+        """Wait for gripper movement to complete - if it moved from initial, it worked"""
         if initial_value is None:
             initial_value = self.get_current_width(timeout=0.5)
-        
-        # Quick check: if already at target state, return immediately
-        if self.is_at_target_state(initial_value):
-            state_str = "closed" if self.target_state == "close" else "open"
-            self.get_logger().info(f"✓ Gripper already {state_str} (width: {initial_value:.2f})")
-            return True
         
         # Start monitoring immediately
         self.get_logger().info("Monitoring gripper movement...")
         if initial_value is not None:
-            self.get_logger().info(f"Starting from width: {initial_value:.2f}, target: {'close' if self.target_state == 'close' else 'open'}")
+            self.get_logger().info(f"Starting from width: {initial_value:.2f}, target: {self.target_state}")
         
         # Monitoring parameters
         max_wait_time = 15.0
         early_retry_time = 5.0
         check_interval = 0.2
         no_change_threshold = 0.3
-        required_stable_checks = 3
+        movement_threshold = 0.5
         required_stable_no_change = 5
         
         start_time = time.time()
         last_value = initial_value
-        stable_count = 0
         no_change_count = 0
         last_change_time = None
+        movement_detected = False
         
         while (time.time() - start_time) < max_wait_time:
             elapsed = time.time() - start_time
             current_value = self.get_current_width(timeout=0.3)
             
-            # Don't check target state here - let it go through the stability checks below
-            # This ensures we wait for the gripper to stop moving
-            
             # Early retry check: if no movement detected within 5 seconds
-            if elapsed >= early_retry_time and initial_value is not None and last_change_time is None:
-                if self.is_at_target_state(current_value):
-                    state_str = "closed" if self.target_state == "close" else "open"
-                    self.get_logger().info(f"✓ Gripper at target state ({state_str}, width: {current_value:.2f}), no retry needed")
-                    return True
-                # Check if value hasn't changed (gripper not responding)
-                if current_value is not None and abs(current_value - initial_value) < 0.5:
+            if elapsed >= early_retry_time and initial_value is not None and not movement_detected:
+                if current_value is not None and abs(current_value - initial_value) < movement_threshold:
                     self.get_logger().warn(f"No gripper movement detected within {early_retry_time}s (width unchanged: {current_value:.2f}). Retrying...")
-                    return False
-                self.get_logger().warn(f"No gripper movement detected within {early_retry_time}s. Retrying...")
-                return False
-            
-            # If movement stopped for too long, retry
-            if elapsed >= early_retry_time and last_change_time is not None:
-                time_since_last_change = time.time() - last_change_time
-                if time_since_last_change >= 3.0:
-                    if self.is_at_target_state(current_value):
-                        state_str = "closed" if self.target_state == "close" else "open"
-                        self.get_logger().info(f"✓ Gripper reached target state ({state_str}, width: {current_value:.2f}), no retry needed")
-                        return True
-                    self.get_logger().warn(f"Gripper movement stopped for {time_since_last_change:.1f}s. Retrying...")
                     return False
             
             if current_value is not None:
                 # Detect movement
-                if last_value is not None and abs(current_value - last_value) > 0.5:
-                    if last_change_time is None:
+                if last_value is not None and abs(current_value - last_value) > movement_threshold:
+                    if not movement_detected:
                         self.get_logger().info(f"Gripper movement detected: {current_value:.2f} (was {last_value:.2f})")
-                    stable_count = 0
+                        movement_detected = True
                     no_change_count = 0
                     last_change_time = time.time()
                 elif last_value is None:
@@ -189,57 +158,32 @@ class GripperController(Node):
                     # Value is stable
                     no_change_count += 1
                     if no_change_count >= required_stable_no_change:
-                        if self.is_at_target_state(current_value):
-                            state_str = "closed" if self.target_state == "close" else "open"
-                            self.get_logger().info(f"✓ Gripper stabilized and {state_str} (width: {current_value:.2f})")
+                        # Movement completed and stabilized
+                        if movement_detected or self.has_moved(initial_value, current_value, movement_threshold):
+                            self.get_logger().info(f"✓ Gripper movement completed and stabilized (width: {current_value:.2f})")
                             return True
                 else:
                     no_change_count = 0
-                
-                # Check if we've reached target threshold AND gripper has stabilized
-                # Only return success if gripper is at target AND has stopped moving
-                if self.is_at_target_state(current_value):
-                    # Check if gripper has stabilized (not changing) - require last_value to be set
-                    if last_value is not None and abs(current_value - last_value) <= no_change_threshold:
-                        stable_count += 1
-                        if stable_count >= required_stable_checks:
-                            if self.target_state == "close":
-                                if current_value < WIDTH_CLOSE_THRESHOLD:
-                                    self.get_logger().info(f"✓ Gripper closed verified (width: {current_value:.2f} < {WIDTH_CLOSE_THRESHOLD})")
-                                else:
-                                    self.get_logger().info(f"✓ Gripper closed and likely grasped object (width: {current_value:.2f})")
-                            else:
-                                self.get_logger().info(f"✓ Gripper open verified (width: {current_value:.2f} > {WIDTH_OPEN_THRESHOLD})")
-                            return True
-                    else:
-                        # At target but still moving or no previous value - reset stable count
-                        stable_count = 0
-                else:
-                    stable_count = 0
                 
                 last_value = current_value
             
             time.sleep(check_interval)
         
-        # Timeout reached - check final state
+        # Timeout reached - check if movement occurred
         self.get_logger().info("Timeout reached, checking final state...")
         time.sleep(1.0)
         
         # Get final reading
         final_value = self.get_current_width(timeout=0.5)
         
-        if self.is_at_target_state(final_value):
-            state_str = "closed" if self.target_state == "close" else "open"
-            if self.target_state == "close" and final_value < WIDTH_CLOSE_THRESHOLD:
-                self.get_logger().info(f"✓ Gripper closed (width: {final_value:.2f} < {WIDTH_CLOSE_THRESHOLD})")
-            elif self.target_state == "close":
-                self.get_logger().info(f"✓ Gripper closed and likely grasped object (width: {final_value:.2f})")
-            else:
-                self.get_logger().info(f"✓ Gripper open (width: {final_value:.2f} > {WIDTH_OPEN_THRESHOLD})")
+        # If gripper moved from initial, consider it successful
+        if final_value is not None and self.has_moved(initial_value, final_value, movement_threshold):
+            self.get_logger().info(f"✓ Gripper movement detected (initial: {initial_value:.2f}, final: {final_value:.2f})")
             return True
         
+        # If no movement detected, return False for retry
         final_value_str = f"{final_value:.2f}" if final_value is not None else "N/A"
-        self.get_logger().warn(f"✗ Gripper verification failed (final width: {final_value_str})")
+        self.get_logger().warn(f"✗ No gripper movement detected (initial: {initial_value:.2f}, final: {final_value_str})")
         return False
     
     def send_gripper_command(self):
@@ -328,15 +272,13 @@ def main(args=None):
     final_value = controller.get_current_width(timeout=2.0)
     if final_value is not None:
         controller.get_logger().info(f"Final gripper width: {final_value:.2f}")
-        
-        # For close command, check if grasp was successful
-        if known_args.command.lower() == "close" and final_value is not None:
-            if final_value < WIDTH_CLOSE_THRESHOLD:
-                controller.get_logger().info(f"Grasp verification: Gripper fully closed (width: {final_value:.2f} < {WIDTH_CLOSE_THRESHOLD})")
-            elif final_value < GRASP_SUCCESS_THRESHOLD:
-                controller.get_logger().info(f"Grasp verification: Likely grasped object (width: {final_value:.2f} between {WIDTH_CLOSE_THRESHOLD} and {GRASP_SUCCESS_THRESHOLD})")
-            else:
-                controller.get_logger().warn(f"Grasp verification: Gripper may not have closed properly (width: {final_value:.2f} > {GRASP_SUCCESS_THRESHOLD})")
+    
+    # Output gripper range and current width
+    controller.get_logger().info(f"Gripper range: {GRIPPER_MIN_WIDTH:.1f} - {GRIPPER_MAX_WIDTH:.1f}mm")
+    if initial_value is not None and final_value is not None:
+        controller.get_logger().info(f"Gripper width: {initial_value:.2f}mm → {final_value:.2f}mm (change: {final_value - initial_value:+.2f}mm)")
+    elif final_value is not None:
+        controller.get_logger().info(f"Current gripper width: {final_value:.2f}mm")
     
     controller.destroy_node()
     rclpy.shutdown()
