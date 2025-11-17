@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Grasp Points Publisher
-Reads object poses from /objects_poses_sim topic and publishes grasp points to /grasp_points topic.
+Reads object poses from /objects_poses_sim topic and publishes grasp points to /grasp_points_sim topic.
 Uses grasp points data from JSON files and transforms them using object poses.
 """
 
@@ -43,7 +43,7 @@ class GraspPointsPublisher(Node):
     """ROS2 node that publishes grasp points based on object poses"""
     
     def __init__(self, objects_poses_topic="/objects_poses_sim", 
-                 grasp_points_topic="/grasp_points",
+                 grasp_points_topic="/grasp_points_sim",
                  data_dir=None):
         super().__init__('grasp_points_publisher')
         
@@ -277,8 +277,8 @@ def main(args=None):
     parser = argparse.ArgumentParser(description='Grasp Points Publisher Node')
     parser.add_argument('--objects-poses-topic', type=str, default="/objects_poses_sim",
                        help='Topic name for object poses subscription (default: /objects_poses_sim)')
-    parser.add_argument('--grasp-points-topic', type=str, default="/grasp_points",
-                       help='Topic name for grasp points publication (default: /grasp_points)')
+    parser.add_argument('--grasp-points-topic', type=str, default="/grasp_points_sim",
+                       help='Topic name for grasp points publication (default: /grasp_points_sim)')
     parser.add_argument('--data-dir', type=str, default=None,
                        help='Directory containing grasp points JSON files (default: data/grasp relative to project root)')
     

@@ -3,7 +3,7 @@
 Direct Object Movement - Native ROS2 Node
 Read object poses from ObjectPoseArray and perform single direct movement to specific object by name
 Includes calibration offset correction for accurate positioning
-Supports grasp point selection from /grasp_points topic
+Supports grasp point selection from /grasp_points_sim (sim mode) or /grasp_points_real (real mode) topics
 """
 
 import rclpy
@@ -135,24 +135,34 @@ class PoseKalmanFilter:
         return self.x[:6], self.x[6:12]
 
 class DirectObjectMove(Node):
-    def __init__(self, topic_name=None, object_name="blue_dot_0", height=None, movement_duration=15.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None, offset=None, mode='real'):
+    def __init__(self, topic_name=None, object_name="blue_dot_0", height=None, movement_duration=15.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None, offset=None, mode='sim'):
         super().__init__('direct_object_move')
         
         self.mode = mode  # 'sim' or 'real'
+        
         # Set default topic based on mode if not provided
         if topic_name is None:
-            if mode == 'sim':
+            if self.mode == 'sim':
                 self.topic_name = "/objects_poses_sim"
             else:
                 self.topic_name = "/objects_poses_real"
         else:
             self.topic_name = topic_name
+        
+        # Set default grasp points topic based on mode if using default value
+        if grasp_points_topic == "/grasp_points":  # Default value - override based on mode
+            if self.mode == 'sim':
+                self.grasp_points_topic = "/grasp_points_sim"
+            else:
+                self.grasp_points_topic = "/grasp_points_real"  # Real mode uses /grasp_points_real
+        else:
+            self.grasp_points_topic = grasp_points_topic  # Use explicitly provided topic
+        
         self.object_name = object_name
         self.height = height  # None means use offset, otherwise use exact height
         self.movement_duration = movement_duration  # Duration for IK movement
         self.target_xyz = target_xyz  # Optional target position [x, y, z]
         self.target_xyzw = target_xyzw  # Optional target orientation [x, y, z, w]
-        self.grasp_points_topic = grasp_points_topic  # Topic for grasp points
         self.grasp_id = grasp_id  # Specific grasp point ID to use
         self.last_target_pose = None
         self.position_threshold = 0.005  # 5mm
@@ -229,19 +239,23 @@ class DirectObjectMove(Node):
         if self.grasp_id is not None and GraspPointArray is not None:
             self.grasp_points_sub = self.create_subscription(
                 GraspPointArray,
-                grasp_points_topic,
+                self.grasp_points_topic,
                 self.grasp_points_callback,
                 5
             )
-            self.get_logger().info(f"🎯 Grasp point mode: Looking for grasp_id {grasp_id} on topic {grasp_points_topic}")
+            self.get_logger().info(f"🎯 Grasp point mode: Looking for grasp_id {grasp_id} on topic {self.grasp_points_topic}")
         else:
             self.grasp_points_sub = None
             if self.grasp_id is not None:
                 self.get_logger().warn(f"⚠️ Grasp point mode requested but GraspPointArray not available. Falling back to object center.")
         
-        # Add timer to control update frequency
-        # For real mode visual servoing: faster updates (1.5s), for sim mode: slower (3.0s)
-        timer_period = 1.5 if mode == 'real' else 3.0
+        # Add timer to control update frequency based on mode
+        if self.mode == 'sim':
+            # Sim mode: slower updates (3.0s)
+            timer_period = 3.0
+        else:
+            # Real mode: faster updates for visual servoing (1.5s)
+            timer_period = 1.5
         self.update_timer = self.create_timer(timer_period, self.timer_callback)
         self.latest_pose = None
         self.movement_completed = False  # Flag to track if movement has been completed
@@ -288,7 +302,7 @@ class DirectObjectMove(Node):
             self.get_logger().info(f"📏 Using {self.object_to_gripper_center_offset*100:.1f}cm object to gripper center offset")
         self.get_logger().info(f"⏱️ Movement duration: {movement_duration}s")
         if self.grasp_id is not None:
-            self.get_logger().info(f"🎯 Grasp point mode: Using grasp_id {grasp_id} from topic {grasp_points_topic}")
+            self.get_logger().info(f"🎯 Grasp point mode: Using grasp_id {grasp_id} from topic {self.grasp_points_topic}")
         else:
             self.get_logger().info(f"🎯 Object center mode: Moving to object center")
         
@@ -481,16 +495,16 @@ class DirectObjectMove(Node):
         if self.movement_completed:
             return
         
-        # Different behavior for sim vs real mode
-        if self.mode == 'real':
-            # Real mode: continuous visual servoing - update even if trajectory in progress
-            # This allows for smooth tracking of moving objects
-            pass  # Continue to process and send new trajectory
-        else:
+        # Mode-specific behavior for trajectory execution
+        if self.mode == 'sim':
             # Sim mode: wait for trajectory to complete before sending new one
             if self.trajectory_in_progress:
                 self.get_logger().debug("Trajectory already in progress, skipping...")
                 return
+        else:
+            # Real mode: continuous visual servoing - update even if trajectory in progress
+            # This allows for smooth tracking of moving objects
+            pass  # Continue to process and send new trajectory
         
         # Wait for end-effector pose if not received yet
         if not self.ee_pose_received or self.current_ee_pose is None:
@@ -827,18 +841,19 @@ class DirectObjectMove(Node):
         target_position = target_ee_position.tolist()
         target_pose = (target_position, rpy)
         
-        # Use the calculated z-coordinate (which is either the specified height or the auto-calculated one)
-        # For real mode visual servoing, use shorter duration for smoother tracking
-        # During recovery mode, slow down significantly
+        # Calculate movement duration based on mode
         if self.mode == 'sim':
+            # Sim mode: use specified movement duration
             movement_duration = self.movement_duration
-        elif self.recovery_mode:
-            # Recovery mode: slow down significantly to allow better detection
-            movement_duration = min(self.movement_duration * self.recovery_slowdown_factor, 10.0)
-            self.get_logger().info(f"🔄 Recovery mode: using slower movement duration {movement_duration:.1f}s")
         else:
-            # Real mode: use longer duration for slower, smoother tracking
-            movement_duration = min(self.movement_duration, 12.0)  # Increased from 5.0s to 12.0s for slower movement
+            # Real mode: adjust duration based on recovery state
+            if self.recovery_mode:
+                # Recovery mode: slow down significantly to allow better detection
+                movement_duration = min(self.movement_duration * self.recovery_slowdown_factor, 10.0)
+                self.get_logger().info(f"🔄 Recovery mode: using slower movement duration {movement_duration:.1f}s")
+            else:
+                # Real mode: use longer duration for slower, smoother tracking
+                movement_duration = min(self.movement_duration, 12.0)  # Increased from 5.0s to 12.0s for slower movement
         
         trajectory = hover_over_grasp(target_pose, target_ee_position[2], movement_duration)
         
@@ -884,17 +899,18 @@ class DirectObjectMove(Node):
             goal.trajectory = traj_msg
             goal.goal_time_tolerance = Duration(sec=1)
             
-            # For real mode visual servoing: send goal without waiting for callbacks
-            # This allows continuous updates
-            if self.mode == 'real':
-                self.get_logger().info("Sending trajectory (visual servoing mode)...")
-                self.action_client.send_goal_async(goal)
-                # Don't wait for callbacks in real mode - allow continuous updates
-            else:
+            # Send trajectory based on mode
+            if self.mode == 'sim':
                 # Sim mode: use callbacks to track completion
-                self.get_logger().info("Sending trajectory...")
+                self.get_logger().info("Sending trajectory (sim mode)...")
                 self._send_goal_future = self.action_client.send_goal_async(goal)
                 self._send_goal_future.add_done_callback(self.goal_response)
+            else:
+                # Real mode: visual servoing - send goal without waiting for callbacks
+                # This allows continuous updates for smooth tracking of moving objects
+                self.get_logger().info("Sending trajectory (real mode visual servoing)...")
+                self.action_client.send_goal_async(goal)
+                # Don't wait for callbacks in real mode - allow continuous updates
             
         except Exception as e:
             self.get_logger().error(f"❌ Trajectory execution error: {e}")
@@ -955,8 +971,8 @@ def main(args=None):
                        help='Specific grasp point ID to use (if provided, will use grasp point instead of object center)')
     parser.add_argument('--offset', type=float, default=None,
                        help='Distance offset from object/grasp point in meters (default: 0.123m = 12.3cm)')
-    parser.add_argument('--mode', type=str, default='real', choices=['sim', 'real'],
-                       help='Mode: "sim" for simulation (uses /objects_poses_sim with ObjectPoseArray), "real" for real robot (uses /objects_poses_real with TFMessage). Default: real')
+    parser.add_argument('--mode', type=str, default='sim', choices=['sim', 'real'],
+                       help='Mode: "sim" for simulation (uses /objects_poses_sim with ObjectPoseArray), "real" for real robot (uses /objects_poses_real with TFMessage). Default: sim')
     
     # Parse arguments from sys.argv if args is None
     if args is None:

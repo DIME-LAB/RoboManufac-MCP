@@ -2595,12 +2595,17 @@ def move_home() -> Dict[str, Any]:
         }
 
 @mcp.tool()
-def move_to_grasp(object_name: str, grasp_id: int) -> Dict[str, Any]:
+def move_to_grasp(object_name: str, grasp_id: int, mode: str = "sim") -> Dict[str, Any]:
     """Move to grasp position.
     
     The grasp_id should be obtained from either:
     - The captured image space (visual analysis of the image)
-    - The /grasp_points topic (ROS topic that publishes available grasp points)
+    - The /grasp_points_sim topic (sim mode) or /grasp_points_real topic (real mode) (ROS topics that publish available grasp points)
+    
+    Args:
+        object_name: Name of the object to grasp
+        grasp_id: ID of the grasp point to use
+        mode: Mode to use - "sim" for simulation or "real" for real robot (default: "sim")
     """
     try:
         import subprocess
@@ -2608,14 +2613,21 @@ def move_to_grasp(object_name: str, grasp_id: int) -> Dict[str, Any]:
         import os
         
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        visual_servo_path = os.path.join(script_dir, "primitives", "visual_servo_grasp_sim.py")
+        visual_servo_path = os.path.join(script_dir, "primitives", "visual_servo_grasp.py")
+        
+        # Validate mode parameter
+        if mode not in ["sim", "real"]:
+            return {
+                "status": "error",
+                "message": f"Invalid mode '{mode}'. Must be 'sim' or 'real'"
+            }
         
         cmd_parts = [
             "source /opt/ros/humble/setup.bash",
             "source ~/Desktop/ros2_ws/install/setup.bash",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
-            f"timeout 60 /usr/bin/python3 visual_servo_grasp_sim.py --object-name \"{object_name}\" --grasp-id {grasp_id}"
+            f"timeout 60 /usr/bin/python3 visual_servo_grasp.py --object-name \"{object_name}\" --grasp-id {grasp_id} --mode {mode}"
         ]
         
         cmd = "\n".join(cmd_parts)
@@ -2636,7 +2648,8 @@ def move_to_grasp(object_name: str, grasp_id: int) -> Dict[str, Any]:
                 "output": result.stdout,
                 "parameters": {
                     "object_name": object_name,
-                    "grasp_id": grasp_id
+                    "grasp_id": grasp_id,
+                    "mode": mode
                 }
             }
         else:
