@@ -194,11 +194,22 @@ export class ClaudeProvider implements ModelProvider {
     }));
 
     // Convert generic Message[] to Anthropic format
-    // Claude doesn't support 'tool' role, so convert tool messages to user messages
-    const anthropicMessages = messages.map((msg) => ({
-      role: (msg.role === 'tool' ? 'user' : msg.role) as 'user' | 'assistant',
-      content: msg.content,
-    }));
+    // Claude doesn't support 'tool' role or tool_calls in messages
+    // - Convert tool messages to user messages
+    // - Filter out assistant messages with only tool_calls (no content) - Claude doesn't store these
+    const anthropicMessages = messages
+      .filter((msg) => {
+        // Skip assistant messages that only have tool_calls but no content
+        // Claude handles tool calls via stream, not in message history
+        if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0 && !msg.content) {
+          return false;
+        }
+        return true;
+      })
+      .map((msg) => ({
+        role: (msg.role === 'tool' ? 'user' : msg.role) as 'user' | 'assistant',
+        content: msg.content || '',
+      }));
 
     const stream = await this.anthropicClient.messages.create({
       messages: anthropicMessages,
@@ -221,11 +232,22 @@ export class ClaudeProvider implements ModelProvider {
     maxTokens: number,
   ): Promise<{ content: Array<{ type: string; text: string }> }> {
     // Convert generic Message[] to Anthropic format
-    // Claude doesn't support 'tool' role, so convert tool messages to user messages
-    const anthropicMessages = messages.map((msg) => ({
-      role: (msg.role === 'tool' ? 'user' : msg.role) as 'user' | 'assistant',
-      content: msg.content,
-    }));
+    // Claude doesn't support 'tool' role or tool_calls in messages
+    // - Convert tool messages to user messages
+    // - Filter out assistant messages with only tool_calls (no content) - Claude doesn't store these
+    const anthropicMessages = messages
+      .filter((msg) => {
+        // Skip assistant messages that only have tool_calls but no content
+        // Claude handles tool calls via stream, not in message history
+        if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0 && !msg.content) {
+          return false;
+        }
+        return true;
+      })
+      .map((msg) => ({
+        role: (msg.role === 'tool' ? 'user' : msg.role) as 'user' | 'assistant',
+        content: msg.content || '',
+      }));
 
     const response = await this.anthropicClient.messages.create({
       messages: anthropicMessages,
