@@ -19,6 +19,7 @@ class HomeRunner(Node):
         self.shutdown_called = False
         self.retry_count = 0
         self.goal_accepted = False
+        self.goal_rejected = False
         self.acceptance_timer = None
         
         if self.client.wait_for_server(timeout_sec=10.0):
@@ -50,6 +51,7 @@ class HomeRunner(Node):
         goal.goal_time_tolerance = Duration(sec=1)
 
         self.goal_accepted = False
+        self.goal_rejected = False
         if self.acceptance_timer:
             self.acceptance_timer.cancel()
         self.acceptance_timer = Timer(5.0, self.check_goal_acceptance)
@@ -57,6 +59,10 @@ class HomeRunner(Node):
         self.client.send_goal_async(goal).add_done_callback(self.goal_response)
     
     def check_goal_acceptance(self):
+        # Don't retry if goal was explicitly rejected
+        if self.goal_rejected:
+            return
+        
         if not self.goal_accepted:
             self.retry_count += 1
             if self.retry_count <= 5:
@@ -74,14 +80,9 @@ class HomeRunner(Node):
             self.acceptance_timer = None
         
         if not goal_handle.accepted:
-            self.retry_count += 1
-            if self.retry_count <= 5:
-                self.get_logger().warn(f"Goal rejected (attempt {self.retry_count}/5). Retrying...")
-                time.sleep(0.5)
-                self.send_home_trajectory()
-            else:
-                self.get_logger().error("Goal rejected after max retries. Exiting.")
-                self.shutdown()
+            self.goal_rejected = True
+            self.get_logger().error("Trajectory goal rejected")
+            self.shutdown()
             return
         
         self.goal_accepted = True
