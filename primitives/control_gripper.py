@@ -110,10 +110,32 @@ class GripperController(Node):
             return False
         return abs(current_width - initial_width) > movement_threshold
     
+    def is_at_target_state(self, width, tolerance=2.0, close_tolerance=10.0):
+        """Check if gripper is already at target state"""
+        if width is None:
+            return False
+        
+        if self.target_state == "open":
+            # Open: should be near max width (110mm)
+            return width >= (GRIPPER_MAX_WIDTH - tolerance)
+        elif self.target_state == "close":
+            # Close: should be near min width (0mm), tolerance 0-10mm
+            return width <= (GRIPPER_MIN_WIDTH + close_tolerance)
+        else:  # numeric
+            # Numeric: should be close to target value
+            target_width = self.numeric_value / 10.0  # Convert from 0-1100 to 0-110
+            return abs(width - target_width) <= tolerance
+    
     def verify_gripper_state(self, initial_value=None):
         """Wait for gripper movement to complete - if it moved from initial, it worked"""
         if initial_value is None:
             initial_value = self.get_current_width(timeout=0.5)
+        
+        # Check if already at target state
+        if initial_value is not None and self.is_at_target_state(initial_value):
+            state_str = "open" if self.target_state == "open" else "closed" if self.target_state == "close" else f"{self.numeric_value/10.0:.1f}mm"
+            self.get_logger().info(f"✓ Gripper already at target state ({state_str}, width: {initial_value:.2f}mm)")
+            return True
         
         # Start monitoring immediately
         self.get_logger().info("Monitoring gripper movement...")
@@ -122,7 +144,7 @@ class GripperController(Node):
         
         # Monitoring parameters
         max_wait_time = 15.0
-        early_retry_time = 5.0
+        early_retry_time = 2.0  # Retry after 2 seconds if no movement detected
         check_interval = 0.2
         no_change_threshold = 0.3
         movement_threshold = 0.5
@@ -133,14 +155,20 @@ class GripperController(Node):
         no_change_count = 0
         last_change_time = None
         movement_detected = False
+        baseline_value = initial_value  # Use first reading as baseline for movement detection
         
         while (time.time() - start_time) < max_wait_time:
             elapsed = time.time() - start_time
             current_value = self.get_current_width(timeout=0.3)
             
-            # Early retry check: if no movement detected within 5 seconds
-            if elapsed >= early_retry_time and initial_value is not None and not movement_detected:
-                if current_value is not None and abs(current_value - initial_value) < movement_threshold:
+            # Set baseline if we don't have one yet
+            if baseline_value is None and current_value is not None:
+                baseline_value = current_value
+                self.get_logger().info(f"Baseline width established: {baseline_value:.2f}")
+            
+            # Early retry check: if no movement detected within 2 seconds
+            if elapsed >= early_retry_time and baseline_value is not None and not movement_detected:
+                if current_value is not None and abs(current_value - baseline_value) < movement_threshold:
                     self.get_logger().warn(f"No gripper movement detected within {early_retry_time}s (width unchanged: {current_value:.2f}). Retrying...")
                     return False
             
@@ -159,7 +187,8 @@ class GripperController(Node):
                     no_change_count += 1
                     if no_change_count >= required_stable_no_change:
                         # Movement completed and stabilized
-                        if movement_detected or self.has_moved(initial_value, current_value, movement_threshold):
+                        check_value = baseline_value if baseline_value is not None else initial_value
+                        if movement_detected or (check_value is not None and self.has_moved(check_value, current_value, movement_threshold)):
                             self.get_logger().info(f"✓ Gripper movement completed and stabilized (width: {current_value:.2f})")
                             return True
                 else:
@@ -176,14 +205,18 @@ class GripperController(Node):
         # Get final reading
         final_value = self.get_current_width(timeout=0.5)
         
-        # If gripper moved from initial, consider it successful
-        if final_value is not None and self.has_moved(initial_value, final_value, movement_threshold):
-            self.get_logger().info(f"✓ Gripper movement detected (initial: {initial_value:.2f}, final: {final_value:.2f})")
+        # Use baseline_value if initial_value was None
+        check_value = baseline_value if baseline_value is not None else initial_value
+        
+        # If gripper moved from baseline, consider it successful
+        if final_value is not None and check_value is not None and self.has_moved(check_value, final_value, movement_threshold):
+            self.get_logger().info(f"✓ Gripper movement detected (baseline: {check_value:.2f}, final: {final_value:.2f})")
             return True
         
         # If no movement detected, return False for retry
+        baseline_value_str = f"{check_value:.2f}" if check_value is not None else "N/A"
         final_value_str = f"{final_value:.2f}" if final_value is not None else "N/A"
-        self.get_logger().warn(f"✗ No gripper movement detected (initial: {initial_value:.2f}, final: {final_value_str})")
+        self.get_logger().warn(f"✗ No gripper movement detected (baseline: {baseline_value_str}, final: {final_value_str})")
         return False
     
     def send_gripper_command(self):
