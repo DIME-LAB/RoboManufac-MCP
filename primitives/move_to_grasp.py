@@ -135,7 +135,7 @@ class PoseKalmanFilter:
         return self.x[:6], self.x[6:12]
 
 class DirectObjectMove(Node):
-    def __init__(self, topic_name=None, object_name="blue_dot_0", height=None, movement_duration=15.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None, offset=None, mode='sim'):
+    def __init__(self, topic_name=None, object_name="blue_dot_0", height=None, movement_duration=5.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None, offset=None, mode='sim'):
         super().__init__('direct_object_move')
         
         self.mode = mode  # 'sim' or 'real'
@@ -591,25 +591,46 @@ class DirectObjectMove(Node):
                 self.tracking_lost_count = 0
                 self.recovery_mode = False
             
-            # Try to get object orientation from latest_pose if available
-            if self.latest_pose is not None:
-                # Extract object orientation and align EE with it
+            # Use grasp point orientation if available, otherwise fall back to object orientation
+            # Check if grasp point has valid orientation (non-zero quaternion)
+            grasp_point_has_orientation = (
+                hasattr(self.selected_grasp_point, 'pose') and
+                hasattr(self.selected_grasp_point.pose, 'orientation') and
+                (abs(self.selected_grasp_point.pose.orientation.w) > 1e-6 or
+                 abs(self.selected_grasp_point.pose.orientation.x) > 1e-6 or
+                 abs(self.selected_grasp_point.pose.orientation.y) > 1e-6 or
+                 abs(self.selected_grasp_point.pose.orientation.z) > 1e-6)
+            )
+            
+            if grasp_point_has_orientation:
+                # Extract grasp point orientation and align EE with it
+                grasp_point_rpy = self.quaternion_to_rpy(
+                    self.selected_grasp_point.pose.orientation.x,
+                    self.selected_grasp_point.pose.orientation.y,
+                    self.selected_grasp_point.pose.orientation.z,
+                    self.selected_grasp_point.pose.orientation.w
+                )
+                # For top-down approach: use grasp point's yaw, pitch=180 (face down), roll=0
+                rpy = [0.0, 180.0, grasp_point_rpy[2]]  # Align yaw with grasp point
+                self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position}")
+                self.get_logger().info(f"🎯 Gripper orientation aligned with grasp point: RPY: [{rpy[0]:.1f}, {rpy[1]:.1f}, {rpy[2]:.1f}] (grasp point yaw: {grasp_point_rpy[2]:.1f}°)")
+            elif self.latest_pose is not None:
+                # Fallback: use object orientation if grasp point orientation not available
                 object_rpy = self.quaternion_to_rpy(
                     self.latest_pose.pose.orientation.x,
                     self.latest_pose.pose.orientation.y,
                     self.latest_pose.pose.orientation.z,
                     self.latest_pose.pose.orientation.w
                 )
-                # TODO: Add gripper orientation control for objects if they are flipped
                 # For top-down approach: use object's yaw, pitch=180 (face down), roll=0
                 rpy = [0.0, 180.0, object_rpy[2]]  # Align yaw with object
                 self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position}")
-                self.get_logger().info(f"🎯 Gripper orientation aligned with object: RPY: [{rpy[0]:.1f}, {rpy[1]:.1f}, {rpy[2]:.1f}] (object yaw: {object_rpy[2]:.1f}°)")
+                self.get_logger().info(f"🎯 Gripper orientation aligned with object (grasp point has no orientation): RPY: [{rpy[0]:.1f}, {rpy[1]:.1f}, {rpy[2]:.1f}] (object yaw: {object_rpy[2]:.1f}°)")
             else:
-                # Fallback: face down if no object orientation available
+                # Final fallback: face down if no orientation available
                 rpy = [0.0, 180.0, 0.0]
                 self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position}")
-                self.get_logger().info(f"🎯 Gripper orientation: face down (RPY: [0.0, 180.0, 0.0]) - no object orientation available")
+                self.get_logger().info(f"🎯 Gripper orientation: face down (RPY: [0.0, 180.0, 0.0]) - no orientation available")
         elif self.latest_pose is not None:
             # Use detected object pose
             # Reset tracking lost count since we have a detection
@@ -749,10 +770,8 @@ class DirectObjectMove(Node):
         self.get_logger().info(f"📍 Current EE position: ({current_ee_position[0]:.3f}, {current_ee_position[1]:.3f}, {current_ee_position[2]:.3f})")
         self.get_logger().info(f"📍 Object position: ({object_position[0]:.3f}, {object_position[1]:.3f}, {object_position[2]:.3f})")
         
-        # Calculate target end-effector position using spherical flexure joint concept
-        # Convert RPY to quaternion for offset calculation
-        r = R.from_euler('xyz', [np.deg2rad(rpy[0]), np.deg2rad(rpy[1]), np.deg2rad(rpy[2])], degrees=False)
-        target_quaternion = r.as_quat()  # [x, y, z, w]
+        # Calculate target end-effector position using simple vertical offsets
+        # Since gripper is always face-down (pitch=180°), all offsets are vertical in world Z-axis
         
         if self.height is not None:
             # If height is explicitly specified, use that exact height (ignore offset)
@@ -763,23 +782,19 @@ class DirectObjectMove(Node):
             ])
             self.get_logger().info(f"📏 Using specified height={self.height:.3f}m (offset ignored)")
         else:
-            # Use TCP offset calculation: offset_point is where gripper center should be
-            # For object center mode: offset_point = object_position - object_to_gripper_center_offset in Z
-            # For grasp points: offset_point = grasp_point_position (already at gripper center)
-            
             # Calculate positions: Object -> Gripper Center -> TCP
             # 1. Subtract offset from object Z to get gripper center (offset point) - gripper center is BELOW object
-            # 2. Compute TCP from offset point using quaternion (along gripper Z-axis)
-            # Formula: gripper_center = object - offset, TCP = gripper_center + 0.24 = object - offset + 0.24
+            # 2. Add TCP offset to gripper center to get TCP position (vertical offset, since gripper is face-down)
+            # Formula: gripper_center = object - object_to_gripper_center_offset
+            #          TCP = gripper_center + tcp_to_gripper_center_offset = object - object_to_gripper_center_offset + tcp_to_gripper_center_offset
             
             # First calculate gripper center (offset point) - gripper center is BELOW the object
             offset_point = object_position.copy()
             offset_point[2] -= self.object_to_gripper_center_offset  # Gripper center is offset below object
             
-            # Then calculate TCP position from offset point using quaternion (same as reference)
-            # This uses the gripper Z-axis direction from the quaternion
-            target_tcp_position = self.compute_tcp_from_offset_point(offset_point, target_quaternion)
-            target_ee_position = np.array(target_tcp_position)
+            # Then calculate TCP position from offset point (simple vertical offset since gripper is face-down)
+            target_ee_position = offset_point.copy()
+            target_ee_position[2] += self.tcp_to_gripper_center_offset  # TCP is above gripper center
             
             self.get_logger().info(f"📏 Offset point (gripper center): ({offset_point[0]:.3f}, {offset_point[1]:.3f}, {offset_point[2]:.3f})")
             self.get_logger().info(f"📏 TCP to gripper center offset: {self.tcp_to_gripper_center_offset*100:.1f}cm (vertical, world Z-axis)")
@@ -919,8 +934,8 @@ def main(args=None):
                        help='Name of the object to move to (e.g., blue_dot_0, red_dot_0)')
     parser.add_argument('--height', type=float, default=None,
                        help='Hover height in meters (if not specified, will use 5.5cm offset from object/grasp point)')
-    parser.add_argument('--movement-duration', type=float, default=15.0,
-                       help='Duration for the movement in seconds (default: 15.0)')
+    parser.add_argument('--movement-duration', type=float, default=5.0,
+                       help='Duration for the movement in seconds (default: 5.0)')
     parser.add_argument('--target-xyz', type=float, nargs=3, default=None,
                        help='Optional target position [x, y, z] in meters')
     parser.add_argument('--target-xyzw', type=float, nargs=4, default=None,
