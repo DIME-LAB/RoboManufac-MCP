@@ -2613,7 +2613,7 @@ def move_to_grasp(object_name: str, grasp_id: int, mode: str = "sim") -> Dict[st
         import os
         
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        visual_servo_path = os.path.join(script_dir, "primitives", "visual_servo_grasp.py")
+        move_to_grasp_path = os.path.join(script_dir, "primitives", "move_to_grasp.py")
         
         # Validate mode parameter
         if mode not in ["sim", "real"]:
@@ -2627,7 +2627,7 @@ def move_to_grasp(object_name: str, grasp_id: int, mode: str = "sim") -> Dict[st
             "source ~/Desktop/ros2_ws/install/setup.bash",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
-            f"timeout 60 /usr/bin/python3 visual_servo_grasp.py --object-name \"{object_name}\" --grasp-id {grasp_id} --mode {mode}"
+            f"timeout 60 /usr/bin/python3 move_to_grasp.py --object-name \"{object_name}\" --grasp-id {grasp_id} --mode {mode}"
         ]
         
         cmd = "\n".join(cmd_parts)
