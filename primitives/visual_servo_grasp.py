@@ -167,7 +167,29 @@ class DirectObjectMove(Node):
         self.last_target_pose = None
         self.position_threshold = 0.005  # 5mm
         self.angle_threshold = 2.0       # 2 degrees
-        # Note: Calibration offsets are only for Z, not X and Y
+        
+        # Calibration offset to correct systematic detection bias (only for real mode)
+        if self.mode == 'real':
+            # First step offsets (initial movement)
+            self.calibration_offset_x = 0.01  # X-axis correction
+            self.calibration_offset_y = +0.04  # Y-axis correction
+            self.calibration_offset_z = 0.05  # Z-axis correction (height)
+            # Second step offsets (fine adjustment)
+            self.fine_offset_x = 0.00  # Fine X-axis correction
+            self.fine_offset_y = -0.00  # Fine Y-axis correction
+            self.fine_offset_z = -0.048  # Fine Z-axis correction (height)
+            # State tracking for two-step movement
+            self.step1_completed = False  # Track if first step is done
+            self.step1_z_position = None  # Store Z position from step 1
+        else:
+            self.calibration_offset_x = 0.000
+            self.calibration_offset_y = 0.000
+            self.calibration_offset_z = 0.000
+            self.fine_offset_x = 0.000
+            self.fine_offset_y = 0.000
+            self.fine_offset_z = 0.000
+            self.step1_completed = False
+            self.step1_z_position = None
         
         # TCP to gripper center offset distance (from TCP to gripper center along gripper Z-axis)
         # This implements a spherical flexure joint concept (same as URSim TCP control):
@@ -249,13 +271,8 @@ class DirectObjectMove(Node):
             if self.grasp_id is not None:
                 self.get_logger().warn(f"⚠️ Grasp point mode requested but GraspPointArray not available. Falling back to object center.")
         
-        # Add timer to control update frequency based on mode
-        if self.mode == 'sim':
-            # Sim mode: slower updates (3.0s)
-            timer_period = 3.0
-        else:
-            # Real mode: faster updates for visual servoing (1.5s)
-            timer_period = 1.5
+        # Add timer to control update frequency (same for both modes)
+        timer_period = 3.0
         self.update_timer = self.create_timer(timer_period, self.timer_callback)
         self.latest_pose = None
         self.movement_completed = False  # Flag to track if movement has been completed
@@ -495,16 +512,10 @@ class DirectObjectMove(Node):
         if self.movement_completed:
             return
         
-        # Mode-specific behavior for trajectory execution
-        if self.mode == 'sim':
-            # Sim mode: wait for trajectory to complete before sending new one
-            if self.trajectory_in_progress:
-                self.get_logger().debug("Trajectory already in progress, skipping...")
-                return
-        else:
-            # Real mode: continuous visual servoing - update even if trajectory in progress
-            # This allows for smooth tracking of moving objects
-            pass  # Continue to process and send new trajectory
+        # Wait for trajectory to complete before sending new one (same for both modes)
+        if self.trajectory_in_progress:
+            self.get_logger().debug("Trajectory already in progress, skipping...")
+            return
         
         # Wait for end-effector pose if not received yet
         if not self.ee_pose_received or self.current_ee_pose is None:
@@ -523,7 +534,18 @@ class DirectObjectMove(Node):
             # Use provided target position and orientation
             object_position = np.array(self.target_xyz[:3])  # Take first 3 elements
             
-            # Note: Calibration offsets are only for Z, not X and Y
+            # Apply calibration offset to correct systematic detection bias (only for real mode)
+            if self.mode == 'real':
+                if not self.step1_completed:
+                    # Step 1: Apply first calibration offsets
+                    object_position[0] += self.calibration_offset_x  # Correct X offset
+                    object_position[1] += self.calibration_offset_y  # Correct Y offset
+                    object_position[2] += self.calibration_offset_z  # Correct Z offset
+                else:
+                    # Step 2: Apply ONLY fine offsets to X, Y, and Z (not first offsets)
+                    object_position[0] += self.fine_offset_x  # Fine X offset only
+                    object_position[1] += self.fine_offset_y  # Fine Y offset only
+                    object_position[2] += self.fine_offset_z  # Fine Z offset only
             
             rpy = self.quaternion_to_rpy(
                 self.target_xyzw[0], self.target_xyzw[1], 
@@ -544,7 +566,18 @@ class DirectObjectMove(Node):
                                   f"y={self.selected_grasp_point.pose.position.y:.6f}, "
                                   f"z={self.selected_grasp_point.pose.position.z:.6f}")
             
-            # Note: Calibration offsets are only for Z, not X and Y
+            # Apply calibration offset to correct systematic detection bias (only for real mode)
+            if self.mode == 'real':
+                if not self.step1_completed:
+                    # Step 1: Apply first calibration offsets
+                    grasp_point_position[0] += self.calibration_offset_x  # Correct X offset
+                    grasp_point_position[1] += self.calibration_offset_y  # Correct Y offset
+                    grasp_point_position[2] += self.calibration_offset_z  # Correct Z offset
+                else:
+                    # Step 2: Apply ONLY fine offsets to X, Y, and Z (not first offsets)
+                    grasp_point_position[0] += self.fine_offset_x  # Fine X offset only
+                    grasp_point_position[1] += self.fine_offset_y  # Fine Y offset only
+                    grasp_point_position[2] += self.fine_offset_z  # Fine Z offset only
             
             # Set object position to grasp point position for distance calculation
             object_position = grasp_point_position
@@ -617,7 +650,18 @@ class DirectObjectMove(Node):
             object_position = np.array(filtered_pose[:3])
             object_rpy = filtered_pose[3:6].tolist()
             
-            # Note: Calibration offsets are only for Z, not X and Y
+            # Apply calibration offset to correct systematic detection bias (only for real mode)
+            if self.mode == 'real':
+                if not self.step1_completed:
+                    # Step 1: Apply first calibration offsets
+                    object_position[0] += self.calibration_offset_x  # Correct X offset
+                    object_position[1] += self.calibration_offset_y  # Correct Y offset
+                    object_position[2] += self.calibration_offset_z  # Correct Z offset
+                else:
+                    # Step 2: Apply ONLY fine offsets to X, Y, and Z (not first offsets)
+                    object_position[0] += self.fine_offset_x  # Fine X offset only
+                    object_position[1] += self.fine_offset_y  # Fine Y offset only
+                    object_position[2] += self.fine_offset_z  # Fine Z offset only
             
             # Smooth Z position after recovery to prevent height jumps
             if self.mode == 'real' and was_tracking_lost:
@@ -761,78 +805,6 @@ class DirectObjectMove(Node):
         
         self.get_logger().info(f"🎯 Final target EE position: ({target_ee_position[0]:.3f}, {target_ee_position[1]:.3f}, {target_ee_position[2]:.3f})")
         
-        # For real mode visual servoing: check convergence based on distance and stability
-        if self.mode == 'real':
-            # Step 1: Verify TCP position (3D distance to target TCP)
-            distance_to_target_tcp = np.linalg.norm(current_ee_position - target_ee_position)
-            tcp_within_convergence = distance_to_target_tcp <= self.convergence_distance_threshold
-            
-            # Step 2: Verify X,Y alignment with object/grasp point
-            # For grasp points: use original grasp point position (before calibration offset)
-            # For object center: use object_position (which may have calibration offset applied)
-            if self.selected_grasp_point is not None:
-                # Use original grasp point position for X,Y verification
-                grasp_point_for_xy_check = np.array([
-                    self.selected_grasp_point.pose.position.x,
-                    self.selected_grasp_point.pose.position.y
-                ])
-                xy_distance_to_object = np.linalg.norm(current_ee_position[:2] - grasp_point_for_xy_check)
-                # Log the grasp point being used for verification
-                self.get_logger().info(f"🔍 XY convergence check: EE=({current_ee_position[0]:.3f}, {current_ee_position[1]:.3f}), "
-                                      f"GraspPoint=({grasp_point_for_xy_check[0]:.3f}, {grasp_point_for_xy_check[1]:.3f}), "
-                                      f"Distance={xy_distance_to_object*100:.2f}cm")
-            else:
-                # Use object position for X,Y verification
-                xy_distance_to_object = np.linalg.norm(current_ee_position[:2] - object_position[:2])
-            xy_within_convergence = xy_distance_to_object <= self.convergence_distance_threshold
-            
-            # Check if pose has changed significantly (only X, Y, yaw - Z changes are expected as detection improves)
-            target_pose_tuple = (target_ee_position.tolist(), rpy)
-            pose_is_similar = self.poses_are_similar(target_ee_position.tolist(), rpy)
-            
-            # Both conditions must be met for convergence
-            within_convergence_distance = tcp_within_convergence and xy_within_convergence
-            
-            if within_convergence_distance:
-                # Both TCP and X,Y are within convergence - check if stable
-                if pose_is_similar:
-                    self.convergence_stable_count += 1
-                    self.get_logger().info(f"🎯 Within convergence distance (TCP 3D: {distance_to_target_tcp*100:.1f}cm, XY to object: {xy_distance_to_object*100:.1f}cm) and stable "
-                                          f"(stable {self.convergence_stable_count}/{self.convergence_stable_threshold})")
-                    
-                    # Exit if we've been stable within convergence distance for enough readings
-                    if self.convergence_stable_count >= self.convergence_stable_threshold:
-                        self.get_logger().info(f"✅ Successfully converged to target (TCP 3D: {distance_to_target_tcp*100:.1f}cm, XY to object: {xy_distance_to_object*100:.1f}cm). Exiting visual servo.")
-                        self.movement_completed = True
-                        self.should_exit = True
-                        return
-                else:
-                    # Close but target changed - reset convergence stable count
-                    self.convergence_stable_count = 0
-                    self.get_logger().info(f"🎯 Within convergence distance (TCP 3D: {distance_to_target_tcp*100:.1f}cm, XY: {xy_distance_to_object*100:.1f}cm) but target updated")
-            else:
-                # Not yet within convergence distance - reset convergence stable count
-                self.convergence_stable_count = 0
-                
-                # Log which condition is not met
-                if not tcp_within_convergence and not xy_within_convergence:
-                    status_msg = f"TCP 3D: {distance_to_target_tcp*100:.1f}cm, XY: {xy_distance_to_object*100:.1f}cm (both need to be ≤{self.convergence_distance_threshold*100:.1f}cm)"
-                elif not tcp_within_convergence:
-                    status_msg = f"TCP 3D: {distance_to_target_tcp*100:.1f}cm (needs ≤{self.convergence_distance_threshold*100:.1f}cm), XY: {xy_distance_to_object*100:.1f}cm ✓"
-                else:
-                    status_msg = f"TCP 3D: {distance_to_target_tcp*100:.1f}cm ✓, XY: {xy_distance_to_object*100:.1f}cm (needs ≤{self.convergence_distance_threshold*100:.1f}cm)"
-                
-                if pose_is_similar:
-                    # Target is stable but we're not close enough yet - keep tracking
-                    self.stable_count += 1
-                    self.get_logger().info(f"🔄 Tracking: {status_msg}, target stable "
-                                          f"(stable {self.stable_count}/{self.stable_threshold})")
-                else:
-                    # Target changed - reset stable count and continue tracking
-                    self.stable_count = 0
-                    self.get_logger().info(f"🎯 Target updated: {status_msg}, updating trajectory to: "
-                                          f"({target_ee_position[0]:.3f}, {target_ee_position[1]:.3f}, {target_ee_position[2]:.3f})")
-        
         # If waiting at last known location, mark that we've sent the trajectory
         if self.waiting_at_last_known and not self.last_known_target_sent:
             self.last_known_target_sent = True
@@ -841,34 +813,24 @@ class DirectObjectMove(Node):
         target_position = target_ee_position.tolist()
         target_pose = (target_position, rpy)
         
-        # Calculate movement duration based on mode
-        if self.mode == 'sim':
-            # Sim mode: use specified movement duration
-            movement_duration = self.movement_duration
-        else:
-            # Real mode: adjust duration based on recovery state
-            if self.recovery_mode:
-                # Recovery mode: slow down significantly to allow better detection
-                movement_duration = min(self.movement_duration * self.recovery_slowdown_factor, 10.0)
-                self.get_logger().info(f"🔄 Recovery mode: using slower movement duration {movement_duration:.1f}s")
-            else:
-                # Real mode: use longer duration for slower, smoother tracking
-                movement_duration = min(self.movement_duration, 12.0)  # Increased from 5.0s to 12.0s for slower movement
+        # Use specified movement duration (same for both modes)
+        movement_duration = self.movement_duration
         
         trajectory = hover_over_grasp(target_pose, target_ee_position[2], movement_duration)
         
-        # Execute trajectory
-        if self.mode == 'sim':
-            # Sim mode: mark as in progress and wait for completion
-            self.trajectory_in_progress = True
-        # Real mode: don't set trajectory_in_progress flag, allow continuous updates
+        # For real mode step 1: store Z position for step 2
+        if self.mode == 'real' and not self.step1_completed:
+            self.step1_z_position = target_ee_position[2]
+            self.get_logger().info(f"📌 Step 1: Storing Z position {self.step1_z_position:.3f}m for step 2")
+        
+        # Execute trajectory (same for both modes: mark as in progress and wait for completion)
+        self.trajectory_in_progress = True
         self.execute_trajectory(trajectory)
         
         # Update last target pose for similarity checking
         self.last_target_pose = (target_ee_position.tolist(), rpy)
         
-        # For sim mode: don't set movement_completed here - wait for trajectory completion
-        # For real mode: movement_completed is set when stable enough
+        # Don't set movement_completed here - wait for trajectory completion callback
     
     def execute_trajectory(self, trajectory):
         """Execute trajectory using ROS2 action"""
@@ -899,23 +861,14 @@ class DirectObjectMove(Node):
             goal.trajectory = traj_msg
             goal.goal_time_tolerance = Duration(sec=1)
             
-            # Send trajectory based on mode
-            if self.mode == 'sim':
-                # Sim mode: use callbacks to track completion
-                self.get_logger().info("Sending trajectory (sim mode)...")
-                self._send_goal_future = self.action_client.send_goal_async(goal)
-                self._send_goal_future.add_done_callback(self.goal_response)
-            else:
-                # Real mode: visual servoing - send goal without waiting for callbacks
-                # This allows continuous updates for smooth tracking of moving objects
-                self.get_logger().info("Sending trajectory (real mode visual servoing)...")
-                self.action_client.send_goal_async(goal)
-                # Don't wait for callbacks in real mode - allow continuous updates
+            # Send trajectory using callbacks to track completion (same for both modes)
+            self.get_logger().info(f"Sending trajectory ({self.mode} mode)...")
+            self._send_goal_future = self.action_client.send_goal_async(goal)
+            self._send_goal_future.add_done_callback(self.goal_response)
             
         except Exception as e:
             self.get_logger().error(f"❌ Trajectory execution error: {e}")
-            if self.mode == 'sim':
-                self.trajectory_in_progress = False  # Clear flag on error
+            self.trajectory_in_progress = False  # Clear flag on error
             self.movement_completed = True
             self.should_exit = True
 
@@ -935,16 +888,23 @@ class DirectObjectMove(Node):
         self._get_result_future.add_done_callback(self.goal_result)
 
     def goal_result(self, future):
-        """Handle goal result (only used in sim mode)"""
+        """Handle goal result (used for both sim and real modes)"""
         result = future.result()
         self.trajectory_in_progress = False  # Clear trajectory in progress flag
         
         if result.status == 4:  # SUCCEEDED
             self.get_logger().info("✅ Trajectory completed successfully")
+            
+            # For real mode: check if step 1 completed, trigger step 2
+            if self.mode == 'real' and not self.step1_completed:
+                self.step1_completed = True
+                self.get_logger().info(f"📌 Step 1 completed. Starting step 2: fixing Z at {self.step1_z_position:.3f}m, applying fine offsets (X: {self.fine_offset_x:.3f}m, Y: {self.fine_offset_y:.3f}m)")
+                # Don't exit - let timer callback trigger step 2
+                return
         else:
             self.get_logger().error(f"Trajectory failed with status: {result.status}")
         
-        # Set exit flags after trajectory completes (sim mode only)
+        # Set exit flags after trajectory completes (or if step 2 completed)
         self.movement_completed = True
         self.should_exit = True
         self.get_logger().info("✅ Direct movement completed. Exiting.")
