@@ -142,8 +142,14 @@ class GraspPointsPublisher(Node):
             }
     
     def quaternion_to_rpy(self, x, y, z, w):
-        """Convert quaternion to roll, pitch, yaw in degrees"""
+        """Convert quaternion to roll, pitch, yaw in degrees
+        
+        Handles gimbal lock cases (when pitch is near ±90°) gracefully.
+        Scipy automatically sets the third angle to zero when gimbal lock is detected.
+        """
         # Use scipy for robust conversion
+        # Note: gimbal lock warnings are expected when pitch ≈ ±90°
+        # Scipy handles this by setting roll to 0, which is the standard approach
         r = R.from_quat([x, y, z, w])
         roll, pitch, yaw = r.as_euler('xyz', degrees=True)
         return roll, pitch, yaw
@@ -151,7 +157,8 @@ class GraspPointsPublisher(Node):
     def transform_grasp_point(self, grasp_point_local, object_pose):
         """
         Transform grasp point from CAD center frame to base frame using object pose.
-        
+        Implements quaternion computation logic based on approach vector.
+
         Args:
             grasp_point_local: Dict with position (x, y, z) relative to CAD center
             object_pose: Dict with translation and quaternion of object in base frame
@@ -171,26 +178,88 @@ class GraspPointsPublisher(Node):
         obj_quaternion = object_pose['quaternion']
         
         # Create rotation matrix from quaternion
-        r = R.from_quat(obj_quaternion)
-        rotation_matrix = r.as_matrix()
+        r_object_world = R.from_quat(obj_quaternion)
+        rot_matrix = r_object_world.as_matrix()
         
-        # Transform: base_position = object_position + rotation * local_position
-        pos_base = obj_translation + rotation_matrix @ pos_local
+        # Coordinate system transformation matrix (same as wireframe)
+        coord_transform = np.array([
+            [-1,  0,  0],  # X-axis: flip (3D graphics X-right → OpenCV X-left)
+            [0,   1,  0],  # Y-axis: unchanged (both systems use Y-up)
+            [0,   0, -1]   # Z-axis: flip (3D graphics Z-forward → OpenCV Z-backward)
+        ])
         
-        # For orientation, we need to combine object orientation with approach vector
-        # Get approach vector (default to [0, 0, 1] if not specified)
-        approach = grasp_point_local.get('approach_vector', {'x': 0.0, 'y': 0.0, 'z': 1.0})
-        approach_vec = np.array([approach['x'], approach['y'], approach['z']])
-        approach_vec = approach_vec / np.linalg.norm(approach_vec)  # Normalize
+        # Apply coordinate system transformation (same as wireframe)
+        grasp_pos_transformed = coord_transform @ pos_local
         
-        # Rotate approach vector by object orientation
-        approach_base = rotation_matrix @ approach_vec
+        # Transform to world frame
+        pos_base = obj_translation + rot_matrix @ grasp_pos_transformed
         
-        # Create quaternion from approach vector (assuming approach is Z-axis direction)
-        # We need to construct a full rotation matrix
-        # For simplicity, we'll use the object's orientation and adjust based on approach
-        # For now, use object orientation directly (can be refined later)
-        quat_base = obj_quaternion
+        # Quaternion computation logic (MATCHES localizer_bridge.py)
+        # Check if grasp point has approach_vector
+        if 'approach_vector' in grasp_point_local:
+            # Define upward direction in world frame (Z-up)
+            upward_world = np.array([0.0, 0.0, 1.0])
+            
+            # Transform upward direction from world frame to object frame
+            # This ensures the approach vector always points upward in world frame
+            # regardless of object orientation
+            # NOTE: The approach_vector from JSON is IGNORED - we always use upward direction
+            approach_vec_transformed = rot_matrix.T @ upward_world
+            
+            # Generate full orientation from approach vector (in object frame)
+            # The approach vector becomes the Z-axis of the gripper frame
+            approach_norm = np.linalg.norm(approach_vec_transformed)
+            if approach_norm < 1e-6:  # Avoid division by zero
+                # Use default orientation if approach vector is invalid
+                grasp_quat_object = np.array([0.0, 0.0, 0.0, 1.0])  # Identity quaternion
+            else:
+                z_axis = approach_vec_transformed / approach_norm
+                
+                # Create a perpendicular vector for X-axis (gripper opening direction)
+                # Use a default direction and make it perpendicular to approach vector
+                if abs(z_axis[0]) < 0.9:  # If not pointing along X
+                    x_axis = np.array([1.0, 0.0, 0.0])
+                else:  # If pointing along X, use Y as reference
+                    x_axis = np.array([0.0, 1.0, 0.0])
+                
+                # Make X-axis perpendicular to Z-axis
+                x_axis = x_axis - np.dot(x_axis, z_axis) * z_axis
+                x_axis_norm = np.linalg.norm(x_axis)
+                if x_axis_norm < 1e-6:  # Avoid division by zero
+                    # Fallback: use a different reference vector
+                    if abs(z_axis[1]) < 0.9:
+                        x_axis = np.array([0.0, 1.0, 0.0])
+                    else:
+                        x_axis = np.array([0.0, 0.0, 1.0])
+                    x_axis = x_axis - np.dot(x_axis, z_axis) * z_axis
+                    x_axis = x_axis / np.linalg.norm(x_axis)
+                else:
+                    x_axis = x_axis / x_axis_norm
+                
+                # Y-axis is cross product of Z and X
+                y_axis = np.cross(z_axis, x_axis)
+                y_axis_norm = np.linalg.norm(y_axis)
+                if y_axis_norm < 1e-6:  # Avoid division by zero
+                    grasp_quat_object = np.array([0.0, 0.0, 0.0, 1.0])  # Identity quaternion
+                else:
+                    y_axis = y_axis / y_axis_norm
+                    
+                    # Construct rotation matrix
+                    rotation_matrix = np.column_stack([x_axis, y_axis, z_axis])
+                    
+                    # Convert to quaternion (in object frame)
+                    grasp_quat_object = R.from_matrix(rotation_matrix).as_quat()
+            
+            # Transform orientation from object frame to world frame
+            # world_orientation = object_orientation * grasp_orientation_object
+            r_grasp_object = R.from_quat(grasp_quat_object)
+            r_object_world = R.from_quat(obj_quaternion)
+            r_grasp_world = r_object_world * r_grasp_object
+            quat_base = r_grasp_world.as_quat()
+            
+        else:
+            # Default orientation (identity in world frame)
+            quat_base = obj_quaternion  # Use object orientation as default
         
         return pos_base, quat_base
     
