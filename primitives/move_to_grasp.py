@@ -800,6 +800,11 @@ class DirectObjectMove(Node):
             self.get_logger().info(f"📏 TCP to gripper center offset: {self.tcp_to_gripper_center_offset*100:.1f}cm (vertical, world Z-axis)")
             self.get_logger().info(f"🎯 Target TCP position: ({target_ee_position[0]:.3f}, {target_ee_position[1]:.3f}, {target_ee_position[2]:.3f})")
         
+        # For sim mode step 1: add z offset of 0.05
+        if self.mode == 'sim' and not self.step1_completed:
+            target_ee_position[2] += 0.05  # Add 0.05m z offset for step 1
+            self.get_logger().info(f"📌 Sim mode Step 1: Adding 0.05m z offset. Target Z: {target_ee_position[2]:.3f}m")
+        
         # Verify the target distance (from TCP to offset point)
         if self.height is None:
             # Simple vertical offset verification (no quaternion needed)
@@ -833,8 +838,8 @@ class DirectObjectMove(Node):
         
         trajectory = hover_over_grasp(target_pose, target_ee_position[2], movement_duration)
         
-        # For real mode step 1: store Z position for step 2
-        if self.mode == 'real' and not self.step1_completed:
+        # For step 1: store Z position for step 2 (both sim and real modes)
+        if not self.step1_completed:
             self.step1_z_position = target_ee_position[2]
             self.get_logger().info(f"📌 Step 1: Storing Z position {self.step1_z_position:.3f}m for step 2")
         
@@ -910,10 +915,13 @@ class DirectObjectMove(Node):
         if result.status == 4:  # SUCCEEDED
             self.get_logger().info("✅ Trajectory completed successfully")
             
-            # For real mode: check if step 1 completed, trigger step 2
-            if self.mode == 'real' and not self.step1_completed:
+            # Check if step 1 completed, trigger step 2 (both sim and real modes)
+            if not self.step1_completed:
                 self.step1_completed = True
-                self.get_logger().info(f"📌 Step 1 completed. Starting step 2: fixing Z at {self.step1_z_position:.3f}m, applying fine offsets (X: {self.fine_offset_x:.3f}m, Y: {self.fine_offset_y:.3f}m)")
+                if self.mode == 'real':
+                    self.get_logger().info(f"📌 Step 1 completed. Starting step 2: fixing Z at {self.step1_z_position:.3f}m, applying fine offsets (X: {self.fine_offset_x:.3f}m, Y: {self.fine_offset_y:.3f}m)")
+                else:  # sim mode
+                    self.get_logger().info(f"📌 Sim mode Step 1 completed. Starting step 2: moving to final position (removing 0.05m z offset)")
                 # Don't exit - let timer callback trigger step 2
                 return
         else:
