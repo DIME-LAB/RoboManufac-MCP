@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
 Grasp Points Publisher
-Reads object poses from /objects_poses_sim topic and publishes grasp points to /grasp_points_sim topic.
+Reads object poses from topic and publishes grasp points to topic.
 Uses grasp points data from JSON files and transforms them using object poses.
+
+Supports two modes:
+- sim: Uses /objects_poses_sim and /grasp_points_sim topics
+- real: Uses /objects_poses_real and /grasp_points_real topics
+
+Usage:
+    python3 grasp_points_publisher.py [--mode sim|real]
 """
 
 import sys
@@ -71,13 +78,30 @@ class GraspPointsPublisher(Node):
         "line_red": {'symmetry_planes': ['xy', 'yz', 'xz']},    # Symmetric about XY, YZ, and XZ planes
     }
     
-    def __init__(self, objects_poses_topic="/objects_poses_sim", 
-                 grasp_points_topic="/grasp_points_sim",
-                 data_dir=None):
+    def __init__(self, objects_poses_topic=None, 
+                 grasp_points_topic=None,
+                 data_dir=None,
+                 mode='sim'):
         super().__init__('grasp_points_publisher')
         
-        self.objects_poses_topic = objects_poses_topic
-        self.grasp_points_topic = grasp_points_topic
+        self.mode = mode  # 'sim' or 'real'
+        
+        # Set default topics based on mode if not provided
+        if objects_poses_topic is None:
+            if self.mode == 'sim':
+                self.objects_poses_topic = "/objects_poses_sim"
+            else:
+                self.objects_poses_topic = "/objects_poses_real"
+        else:
+            self.objects_poses_topic = objects_poses_topic
+        
+        if grasp_points_topic is None:
+            if self.mode == 'sim':
+                self.grasp_points_topic = "/grasp_points_sim"
+            else:
+                self.grasp_points_topic = "/grasp_points_real"
+        else:
+            self.grasp_points_topic = grasp_points_topic
         
         # Set up data directory
         if data_dir is None:
@@ -104,7 +128,7 @@ class GraspPointsPublisher(Node):
         )
         self.pose_sub = self.create_subscription(
             TFMessage,
-            objects_poses_topic,
+            self.objects_poses_topic,
             self.objects_poses_callback,
             qos_profile
         )
@@ -112,7 +136,7 @@ class GraspPointsPublisher(Node):
         # Create publisher for grasp points
         self.grasp_pub = self.create_publisher(
             GraspPointArray,
-            grasp_points_topic,
+            self.grasp_points_topic,
             qos_profile
         )
         
@@ -120,8 +144,9 @@ class GraspPointsPublisher(Node):
         self.publish_timer = self.create_timer(0.1, self.publish_grasp_points)  # 10 Hz
         
         self.get_logger().info(f"🤖 Grasp Points Publisher started")
-        self.get_logger().info(f"📥 Subscribing to: {objects_poses_topic}")
-        self.get_logger().info(f"📤 Publishing to: {grasp_points_topic}")
+        self.get_logger().info(f"📥 Subscribing to: {self.objects_poses_topic}")
+        self.get_logger().info(f"📤 Publishing to: {self.grasp_points_topic}")
+        self.get_logger().info(f"🔧 Mode: {self.mode.upper()}")
         self.get_logger().info(f"📁 Data directory: {self.data_dir}")
         self.get_logger().info(f"📦 Loaded grasp data for {len(self.grasp_data)} objects")
     
@@ -619,10 +644,12 @@ def main(args=None):
     import argparse
     
     parser = argparse.ArgumentParser(description='Grasp Points Publisher Node')
-    parser.add_argument('--objects-poses-topic', type=str, default="/objects_poses_sim",
-                       help='Topic name for object poses subscription (default: /objects_poses_sim)')
-    parser.add_argument('--grasp-points-topic', type=str, default="/grasp_points_sim",
-                       help='Topic name for grasp points publication (default: /grasp_points_sim)')
+    parser.add_argument('--objects-poses-topic', type=str, default=None,
+                       help='Topic name for object poses subscription (default: based on mode)')
+    parser.add_argument('--grasp-points-topic', type=str, default=None,
+                       help='Topic name for grasp points publication (default: based on mode)')
+    parser.add_argument('--mode', type=str, default='sim', choices=['sim', 'real'],
+                       help='Mode: "sim" for simulation (uses /objects_poses_sim, /grasp_points_sim), "real" for real robot (uses /objects_poses_real, /grasp_points_real). Default: sim')
     parser.add_argument('--data-dir', type=str, default=None,
                        help='Directory containing grasp points JSON files (default: data/grasp relative to project root)')
     
@@ -636,7 +663,8 @@ def main(args=None):
     node = GraspPointsPublisher(
         objects_poses_topic=args.objects_poses_topic,
         grasp_points_topic=args.grasp_points_topic,
-        data_dir=args.data_dir
+        data_dir=args.data_dir,
+        mode=args.mode
     )
     
     try:
