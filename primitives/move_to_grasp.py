@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Direct Object Movement - Native ROS2 Node
-Read object poses from ObjectPoseArray and perform single direct movement to specific object by name
+Read object poses from TFMessage and perform single direct movement to specific object by name
 Includes calibration offset correction for accurate positioning
 Supports grasp point selection from /grasp_points_sim (sim mode) or /grasp_points_real (real mode) topics
 """
@@ -221,19 +221,16 @@ class DirectObjectMove(Node):
         self.ee_pose_received = False
         
         # Subscribe to object poses topic based on mode
+        # Both sim and real modes use TFMessage (simulation publishes TFMessage, not ObjectPoseArray)
         if self.mode == 'sim':
-            # Sim mode: use ObjectPoseArray (for /objects_poses_sim topic)
-            if ObjectPoseArray is not None:
-                self.pose_sub = self.create_subscription(
-                    ObjectPoseArray,
-                    self.topic_name,
-                    self.objects_poses_callback,
-                    5  # Lower QoS to reduce update frequency
-                )
-                self.get_logger().info(f"Using SIM mode: subscribed to {self.topic_name} (ObjectPoseArray)")
-            else:
-                self.get_logger().error("ObjectPoseArray not available. Cannot use sim mode.")
-                raise ImportError("ObjectPoseArray not available for sim mode")
+            # Sim mode: use TFMessage (for /objects_poses_sim topic which publishes TFMessage)
+            self.pose_sub = self.create_subscription(
+                TFMessage,
+                self.topic_name,
+                self.tf_message_callback,
+                5  # Lower QoS to reduce update frequency
+            )
+            self.get_logger().info(f"Using SIM mode: subscribed to {self.topic_name} (TFMessage)")
         else:
             # Real mode: use TFMessage (for /objects_poses_real topic which publishes TFMessage)
             self.pose_sub = self.create_subscription(
@@ -955,7 +952,7 @@ def main(args=None):
     parser.add_argument('--offset', type=float, default=None,
                        help='Distance offset from object/grasp point in meters (default: 0.123m = 12.3cm)')
     parser.add_argument('--mode', type=str, default='sim', choices=['sim', 'real'],
-                       help='Mode: "sim" for simulation (uses /objects_poses_sim with ObjectPoseArray), "real" for real robot (uses /objects_poses_real with TFMessage). Default: sim')
+                       help='Mode: "sim" for simulation (uses /objects_poses_sim with TFMessage), "real" for real robot (uses /objects_poses_real with TFMessage). Default: sim')
     
     # Parse arguments from sys.argv if args is None
     if args is None:
