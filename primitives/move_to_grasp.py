@@ -23,7 +23,10 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 # Import from local action_libraries file
-from action_libraries import hover_over_grasp
+from action_libraries import hover_over_grasp_quat
+
+# Import quaternion controller for gimbal-lock-free gripper orientation
+from quaternion_orientation_controller import QuaternionOrientationController
 
 # Import the new message types
 try:
@@ -135,8 +138,14 @@ class PoseKalmanFilter:
         return self.x[:6], self.x[6:12]
 
 class DirectObjectMove(Node):
-    def __init__(self, topic_name=None, object_name="blue_dot_0", height=None, movement_duration=5.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None, offset=None, mode='sim'):
+    def __init__(self, topic_name=None, object_name="blue_dot_0", height=None, movement_duration=5.0, target_xyz=None, target_xyzw=None, grasp_points_topic="/grasp_points", grasp_id=None, offset=None, mode=None):
         super().__init__('direct_object_move')
+        
+        # Mode must be explicitly specified - no default
+        if mode is None:
+            raise ValueError("Mode must be explicitly specified. Use 'sim' or 'real'.")
+        if mode not in ['sim', 'real']:
+            raise ValueError(f"Invalid mode '{mode}'. Must be 'sim' or 'real'.")
         
         self.mode = mode  # 'sim' or 'real'
         
@@ -211,6 +220,14 @@ class DirectObjectMove(Node):
         # Initialize Kalman filter
         self.kalman_filter = PoseKalmanFilter(process_noise=0.005, measurement_noise=0.05)
         self.last_update_time = None
+        
+        # Initialize Quaternion Orientation Controller for gimbal-lock-free gripper control
+        # This ensures stable gripper orientation at pitch=180° (face down) for any yaw angle
+        self.quat_controller = QuaternionOrientationController()
+        self.get_logger().info("✅ Quaternion orientation controller initialized (gimbal-lock-free mode)")
+        
+        # Fold symmetry directory for canonical pose matching
+        self.symmetry_dir = "/home/aaugus11/Projects/aruco-grasp-annotator/data/symmetry"
         
         # Store latest grasp points
         self.latest_grasp_points = None
@@ -288,7 +305,7 @@ class DirectObjectMove(Node):
         self.tracking_lost_count = 0  # Count consecutive frames without detection
         self.max_tracking_lost = 3  # Max consecutive lost detections before recovery
         self.last_known_object_position = None  # Store last known good position
-        self.last_known_object_rpy = None  # Store last known good orientation
+        self.last_known_object_quat = None  # Store last known good orientation (quaternion, no RPY)
         self.recovery_mode = False  # Flag to indicate we're in recovery mode
         self.recovery_backoff_distance = 0.05  # Move back 5cm when tracking lost
         self.recovery_slowdown_factor = 2.0  # Slow down movement by this factor during recovery
@@ -399,12 +416,12 @@ class DirectObjectMove(Node):
         
         return tcp_position.tolist()
     
-    def poses_are_similar(self, position, rpy):
-        """Check if pose is similar to last target"""
+    def poses_are_similar(self, position, quaternion):
+        """Check if pose is similar to last target (QUATERNION-BASED, no RPY)"""
         if self.last_target_pose is None:
             return False
             
-        last_pos, last_rpy = self.last_target_pose
+        last_pos, last_quat = self.last_target_pose
         
         # Check position difference (only x, y)
         pos_diff = math.sqrt(
@@ -415,12 +432,25 @@ class DirectObjectMove(Node):
         if pos_diff > self.position_threshold:
             return False
             
-        # Check yaw difference
-        angle_diff = abs(rpy[2] - last_rpy[2])
-        if angle_diff > 180:
-            angle_diff = 360 - angle_diff
-            
-        return angle_diff <= self.angle_threshold
+        # Check quaternion difference using dot product (quaternion similarity)
+        # For unit quaternions, dot product gives cos(angle/2), so abs(dot) gives angle similarity
+        # If dot product is close to 1 or -1, quaternions represent similar orientations
+        quat_array = np.array(quaternion)
+        last_quat_array = np.array(last_quat)
+        
+        # Normalize quaternions (should already be normalized, but ensure it)
+        quat_array = quat_array / np.linalg.norm(quat_array)
+        last_quat_array = last_quat_array / np.linalg.norm(last_quat_array)
+        
+        # Dot product to measure angular distance
+        dot_product = abs(np.dot(quat_array, last_quat_array))
+        
+        # Convert to angle: angle = 2 * acos(dot_product)
+        # For small angles: angle ≈ 2 * (1 - dot_product)
+        angle_diff_radians = 2 * math.acos(np.clip(dot_product, -1.0, 1.0))
+        angle_diff_degrees = math.degrees(angle_diff_radians)
+        
+        return angle_diff_degrees <= self.angle_threshold
     
     def objects_poses_callback(self, msg):
         """Handle ObjectPoseArray message and find target object"""
@@ -526,6 +556,18 @@ class DirectObjectMove(Node):
             self.current_ee_pose.pose.position.z
         ])
         
+        # Verify that at least one explicit mode is specified
+        has_explicit_mode = (
+            (self.target_xyz is not None and self.target_xyzw is not None) or
+            (self.grasp_id is not None) or
+            (self.latest_pose is not None)  # Object detection is also an explicit mode when object_name is provided
+        )
+        
+        if not has_explicit_mode:
+            self.get_logger().error("❌ No explicit mode specified. Must provide one of: target_xyz/xyzw, grasp_id, or object detection. Exiting.")
+            self.should_exit = True
+            return
+        
         # Check if we have optional target position/orientation
         if self.target_xyz is not None and self.target_xyzw is not None:
             # Use provided target position and orientation
@@ -544,12 +586,48 @@ class DirectObjectMove(Node):
                     object_position[1] += self.fine_offset_y  # Fine Y offset only
                     object_position[2] += self.fine_offset_z  # Fine Z offset only
             
-            rpy = self.quaternion_to_rpy(
-                self.target_xyzw[0], self.target_xyzw[1], 
-                self.target_xyzw[2], self.target_xyzw[3]
+            # Use provided target quaternion and apply fold symmetry matching
+            provided_quat = np.array(self.target_xyzw)
+            
+            # Normalize to canonical pose using fold symmetry (validation only)
+            canonical_quat = self.quat_controller.normalize_to_canonical(
+                provided_quat, self.object_name, self.symmetry_dir, threshold=0.1
             )
-            self.get_logger().info(f"🎯 Using provided target position: {object_position} and orientation: {rpy}")
-        elif self.selected_grasp_point is not None:
+            
+            # Check if canonical match was found
+            canonical_match = not np.array_equal(
+                canonical_quat / np.linalg.norm(canonical_quat),
+                provided_quat / np.linalg.norm(provided_quat)
+            )
+            
+            # Always extract yaw from PROVIDED quaternion (not canonical)
+            # The canonical match tells us the provided pose is equivalent to canonical pose due to fold symmetry,
+            # but the provided quaternion has the actual orientation in world frame
+            object_yaw = self.quat_controller.extract_yaw_from_quaternion(provided_quat)
+            target_quaternion = self.quat_controller.face_down_quaternion(object_yaw)
+            
+            # Log fold symmetry matching result
+            match_status = "✅ Canonical match" if canonical_match else "⚠️ No canonical match (using provided)"
+            # Always extract from provided quaternion, not canonical
+            yaw_source = "provided quaternion"
+            
+            self.get_logger().info(f"🎯 Using provided target position: {object_position}")
+            self.get_logger().info(f"🎯 Provided quaternion: q=[{provided_quat[0]:.6f}, {provided_quat[1]:.6f}, "
+                                 f"{provided_quat[2]:.6f}, {provided_quat[3]:.6f}]")
+            if canonical_match:
+                self.get_logger().info(f"🎯 Provided quaternion (canonical match): q=[{canonical_quat[0]:.6f}, {canonical_quat[1]:.6f}, "
+                                     f"{canonical_quat[2]:.6f}, {canonical_quat[3]:.6f}] - {match_status}")
+            else:
+                self.get_logger().info(f"🎯 {match_status}")
+            self.get_logger().info(f"🎯 Target gripper quaternion: q=[{target_quaternion[0]:.6f}, {target_quaternion[1]:.6f}, "
+                                 f"{target_quaternion[2]:.6f}, {target_quaternion[3]:.6f}] (yaw: {object_yaw:.1f}° extracted from {yaw_source})")
+        elif self.grasp_id is not None:
+            # Grasp point mode: must have selected_grasp_point, exit if not available
+            if self.selected_grasp_point is None:
+                self.get_logger().error(f"❌ Grasp point {self.grasp_id} not found. Cannot proceed in grasp point mode. Exiting.")
+                self.should_exit = True
+                return
+            
             # Use only grasp point position (ignore orientation)
             grasp_point_position = np.array([
                 self.selected_grasp_point.pose.position.x,
@@ -588,7 +666,7 @@ class DirectObjectMove(Node):
                 self.tracking_lost_count = 0
                 self.recovery_mode = False
             
-            # Use grasp point orientation if available, otherwise fall back to object orientation
+            # Use grasp point orientation if available, otherwise exit (grasp point must have orientation)
             # Check if grasp point has valid orientation (non-zero quaternion)
             grasp_point_has_orientation = (
                 hasattr(self.selected_grasp_point, 'pose') and
@@ -599,35 +677,57 @@ class DirectObjectMove(Node):
                  abs(self.selected_grasp_point.pose.orientation.z) > 1e-6)
             )
             
+            if not grasp_point_has_orientation:
+                # Grasp point orientation is required - exit if not available
+                self.get_logger().error(f"❌ Grasp point {self.grasp_id} does not have valid orientation. Cannot proceed. Exiting.")
+                self.should_exit = True
+                return
+            
             if grasp_point_has_orientation:
-                # Extract grasp point orientation and align EE with it
-                grasp_point_rpy = self.quaternion_to_rpy(
+                # Extract grasp point orientation and apply fold symmetry matching
+                grasp_point_quat = np.array([
                     self.selected_grasp_point.pose.orientation.x,
                     self.selected_grasp_point.pose.orientation.y,
                     self.selected_grasp_point.pose.orientation.z,
                     self.selected_grasp_point.pose.orientation.w
+                ])
+                
+                # Normalize to canonical pose using fold symmetry (validation only)
+                canonical_quat = self.quat_controller.normalize_to_canonical(
+                    grasp_point_quat, self.object_name, self.symmetry_dir, threshold=0.1
                 )
-                # For top-down approach: use grasp point's yaw, pitch=180 (face down), roll=0
-                rpy = [0.0, 180.0, grasp_point_rpy[2]]  # Align yaw with grasp point
-                self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position}")
-                self.get_logger().info(f"🎯 Gripper orientation aligned with grasp point: RPY: [{rpy[0]:.1f}, {rpy[1]:.1f}, {rpy[2]:.1f}] (grasp point yaw: {grasp_point_rpy[2]:.1f}°)")
-            elif self.latest_pose is not None:
-                # Fallback: use object orientation if grasp point orientation not available
-                object_rpy = self.quaternion_to_rpy(
-                    self.latest_pose.pose.orientation.x,
-                    self.latest_pose.pose.orientation.y,
-                    self.latest_pose.pose.orientation.z,
-                    self.latest_pose.pose.orientation.w
+                
+                # Check if canonical match was found
+                canonical_match = not np.array_equal(
+                    canonical_quat / np.linalg.norm(canonical_quat),
+                    grasp_point_quat / np.linalg.norm(grasp_point_quat)
                 )
-                # For top-down approach: use object's yaw, pitch=180 (face down), roll=0
-                rpy = [0.0, 180.0, object_rpy[2]]  # Align yaw with object
+                
+                # Always extract yaw from DETECTED grasp point quaternion (not canonical)
+                # The canonical match tells us the grasp point is equivalent to canonical pose due to fold symmetry,
+                # but the detected quaternion has the actual grasp point orientation in world frame
+                grasp_point_yaw = self.quat_controller.extract_yaw_from_quaternion(grasp_point_quat)
+                
+                # Create face-down quaternion with grasp point yaw (QUATERNION-BASED, no gimbal lock)
+                target_quaternion = self.quat_controller.face_down_quaternion(grasp_point_yaw)
+                
+                # Log fold symmetry matching result
+                match_status = "✅ Canonical match" if canonical_match else "⚠️ No canonical match (using grasp point)"
+                # Always extract from detected grasp point quaternion, not canonical
+                yaw_source = "detected quaternion"
+                
                 self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position}")
-                self.get_logger().info(f"🎯 Gripper orientation aligned with object (grasp point has no orientation): RPY: [{rpy[0]:.1f}, {rpy[1]:.1f}, {rpy[2]:.1f}] (object yaw: {object_rpy[2]:.1f}°)")
-            else:
-                # Final fallback: face down if no orientation available
-                rpy = [0.0, 180.0, 0.0]
-                self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position}")
-                self.get_logger().info(f"🎯 Gripper orientation: face down (RPY: [0.0, 180.0, 0.0]) - no orientation available")
+                self.get_logger().info(f"🎯 Grasp point quaternion (detected): q=[{grasp_point_quat[0]:.6f}, {grasp_point_quat[1]:.6f}, "
+                                     f"{grasp_point_quat[2]:.6f}, {grasp_point_quat[3]:.6f}]")
+                if canonical_match:
+                    self.get_logger().info(f"🎯 Grasp point quaternion (canonical match): q=[{canonical_quat[0]:.6f}, {canonical_quat[1]:.6f}, "
+                                         f"{canonical_quat[2]:.6f}, {canonical_quat[3]:.6f}] - {match_status}")
+                else:
+                    self.get_logger().info(f"🎯 {match_status}")
+                self.get_logger().info(f"🎯 Gripper orientation (quaternion-based, no gimbal lock):\n"
+                                     f"   q=[{target_quaternion[0]:.6f}, {target_quaternion[1]:.6f}, "
+                                     f"{target_quaternion[2]:.6f}, {target_quaternion[3]:.6f}]\n"
+                                     f"   Aligned with grasp point yaw: {grasp_point_yaw:.1f}° (extracted from {yaw_source})")
         elif self.latest_pose is not None:
             # Use detected object pose
             # Reset tracking lost count since we have a detection
@@ -664,9 +764,36 @@ class DirectObjectMove(Node):
             if filtered_pose is None:
                 return
                 
-            # Extract filtered position and orientation
+            # Extract filtered position (Kalman filter still used for position smoothing)
             object_position = np.array(filtered_pose[:3])
-            object_rpy = filtered_pose[3:6].tolist()
+            
+            # Extract quaternion directly from latest_pose (bypass Kalman filter for orientation)
+            # This ensures we work with pure quaternions, avoiding gimbal lock
+            detected_object_quat = np.array([
+                self.latest_pose.pose.orientation.x,
+                self.latest_pose.pose.orientation.y,
+                self.latest_pose.pose.orientation.z,
+                self.latest_pose.pose.orientation.w
+            ])
+            
+            # Normalize to canonical pose using fold symmetry matching
+            # This tells us if the detected pose matches a canonical pose (for validation)
+            canonical_quat = self.quat_controller.normalize_to_canonical(
+                detected_object_quat, self.object_name, self.symmetry_dir, threshold=0.1
+            )
+            
+            # Check if canonical match was found
+            canonical_match = not np.array_equal(
+                canonical_quat / np.linalg.norm(canonical_quat),
+                detected_object_quat / np.linalg.norm(detected_object_quat)
+            )
+            
+            # Always extract yaw from DETECTED quaternion (not canonical)
+            # The canonical match tells us the object is equivalent to canonical pose due to fold symmetry,
+            # but the detected quaternion has the actual object orientation in world frame
+            # The canonical quaternion represents a fold-symmetry rotation (e.g., 180° around Y-axis),
+            # so its yaw component doesn't represent the object's actual yaw
+            object_yaw = self.quat_controller.extract_yaw_from_quaternion(detected_object_quat)
             
             # Apply calibration offset to correct systematic detection bias (only for real mode)
             if self.mode == 'real':
@@ -703,20 +830,33 @@ class DirectObjectMove(Node):
                     # First detection after recovery, initialize smoothed Z
                     self.smoothed_object_z = object_position[2]
             
-            # Store last known good position for recovery
+            # Store last known good position and quaternion for recovery
             if self.mode == 'real':
                 self.last_known_object_position = object_position.copy()
-                self.last_known_object_rpy = object_rpy.copy()
+                self.last_known_object_quat = detected_object_quat.copy()
             
-            # Align end-effector with object orientation
-            # TODO: Add gripper orientation control for objects if they are flipped
+            # Align end-effector with object orientation using QUATERNION (no gimbal lock)
             # For top-down approach: use object's yaw to align, pitch=180 (face down), roll=0
             # This ensures the gripper aligns with the object's orientation while approaching from above
-            rpy = [0.0, 180.0, object_rpy[2]]  # Align yaw with object, face down
+            target_quaternion = self.quat_controller.face_down_quaternion(object_yaw)
+            
+            # Log fold symmetry matching result
+            match_status = "✅ Canonical match" if canonical_match else "⚠️ No canonical match (using detected)"
+            # Always extract from detected quaternion, not canonical
+            yaw_source = "detected quaternion"
             
             self.get_logger().info(f"🎯 Detected object at ({object_position[0]:.3f}, {object_position[1]:.3f}, {object_position[2]:.3f})")
-            self.get_logger().info(f"🎯 Object orientation (RPY): [{object_rpy[0]:.1f}, {object_rpy[1]:.1f}, {object_rpy[2]:.1f}]°")
-            self.get_logger().info(f"🎯 EE orientation aligned with object (RPY): [{rpy[0]:.1f}, {rpy[1]:.1f}, {rpy[2]:.1f}]°")
+            self.get_logger().info(f"🎯 Object quaternion (detected): q=[{detected_object_quat[0]:.6f}, {detected_object_quat[1]:.6f}, "
+                                 f"{detected_object_quat[2]:.6f}, {detected_object_quat[3]:.6f}]")
+            if canonical_match:
+                self.get_logger().info(f"🎯 Object quaternion (canonical match): q=[{canonical_quat[0]:.6f}, {canonical_quat[1]:.6f}, "
+                                     f"{canonical_quat[2]:.6f}, {canonical_quat[3]:.6f}] - {match_status}")
+            else:
+                self.get_logger().info(f"🎯 {match_status}")
+            self.get_logger().info(f"🎯 EE orientation (quaternion-based, no gimbal lock):\n"
+                                 f"   q=[{target_quaternion[0]:.6f}, {target_quaternion[1]:.6f}, "
+                                 f"{target_quaternion[2]:.6f}, {target_quaternion[3]:.6f}]\n"
+                                 f"   Aligned with object yaw: {object_yaw:.1f}° (extracted from {yaw_source})")
         else:
             # No target provided and no object detected
             if self.mode == 'real' and self.last_known_object_position is not None:
@@ -731,10 +871,11 @@ class DirectObjectMove(Node):
                         self.recovery_mode = True
                         self.get_logger().warn(f"🔄 Moving to last known location and waiting for tracking recovery...")
                     
-                    # Use last known position
+                    # Use last known position (QUATERNION-BASED, no gimbal lock)
                     object_position = self.last_known_object_position.copy()
-                    object_rpy = self.last_known_object_rpy.copy()
-                    rpy = [0.0, 180.0, object_rpy[2]]
+                    working_object_quat = self.last_known_object_quat.copy()
+                    object_yaw = self.quat_controller.extract_yaw_from_quaternion(working_object_quat)
+                    target_quaternion = self.quat_controller.face_down_quaternion(object_yaw)
                     
                     # Only send trajectory once to last known location
                     if not self.last_known_target_sent:
@@ -745,19 +886,28 @@ class DirectObjectMove(Node):
                         self.get_logger().info("⏸️ Waiting at last known location for tracking recovery...")
                         return  # Don't send new trajectories, just wait
                 else:
-                    # Not enough consecutive misses yet, use last known position
+                    # Not enough consecutive misses yet, use last known position (QUATERNION-BASED)
                     if self.last_known_object_position is not None:
                         object_position = self.last_known_object_position.copy()
-                        object_rpy = self.last_known_object_rpy.copy()
-                        rpy = [0.0, 180.0, object_rpy[2]]
+                        working_object_quat = self.last_known_object_quat.copy()
+                        object_yaw = self.quat_controller.extract_yaw_from_quaternion(working_object_quat)
+                        target_quaternion = self.quat_controller.face_down_quaternion(object_yaw)
                         self.get_logger().warn(f"⚠️ Using last known position (miss {self.tracking_lost_count}/{self.max_tracking_lost})")
                     else:
-                        self.get_logger().warn("No target position provided and no object detected, and no last known position")
+                        self.get_logger().error("❌ No target position provided, no object detected, and no last known position. Cannot proceed. Exiting.")
+                        self.should_exit = True
                         return
             else:
-                # Sim mode or no last known position: just return
-                self.get_logger().warn("No target position provided and no object detected")
+                # No explicit mode specified and no object detected: exit
+                self.get_logger().error("❌ No explicit mode specified (no target_xyz/xyzw, no grasp_id) and no object detected. Cannot proceed. Exiting.")
+                self.should_exit = True
                 return
+        
+        # Verify that we have a valid target position and orientation (safety check)
+        if 'object_position' not in locals() or 'target_quaternion' not in locals():
+            self.get_logger().error("❌ Failed to determine target position or orientation. Cannot proceed. Exiting.")
+            self.should_exit = True
+            return
         
         # Calculate direction vector from object to current end-effector
         direction_vector = current_ee_position - object_position
@@ -826,14 +976,21 @@ class DirectObjectMove(Node):
         if self.waiting_at_last_known and not self.last_known_target_sent:
             self.last_known_target_sent = True
         
-        # Create target pose with calculated position
+        # Create target pose with calculated position (PURE QUATERNION, no RPY conversion)
         target_position = target_ee_position.tolist()
-        target_pose = (target_position, rpy)
+        
+        # Keep quaternion representation throughout - NO RPY conversion
+        # hover_over_grasp_quat extracts yaw directly from quaternion without RPY
+        target_pose_quat = (target_position, target_quaternion)
         
         # Use specified movement duration (same for both modes)
         movement_duration = self.movement_duration
         
-        trajectory = hover_over_grasp(target_pose, target_ee_position[2], movement_duration)
+        self.get_logger().info(f"🎯 Final gripper orientation (PURE QUATERNION, no gimbal lock):")
+        self.get_logger().info(f"   q=[{target_quaternion[0]:.6f}, {target_quaternion[1]:.6f}, "
+                             f"{target_quaternion[2]:.6f}, {target_quaternion[3]:.6f}]")
+        
+        trajectory = hover_over_grasp_quat(target_pose_quat, target_ee_position[2], movement_duration)
         
         # For step 1: store Z position for step 2 (both sim and real modes)
         if not self.step1_completed:
@@ -844,8 +1001,8 @@ class DirectObjectMove(Node):
         self.trajectory_in_progress = True
         self.execute_trajectory(trajectory)
         
-        # Update last target pose for similarity checking
-        self.last_target_pose = (target_ee_position.tolist(), rpy)
+        # Update last target pose for similarity checking (PURE QUATERNION, no RPY)
+        self.last_target_pose = (target_ee_position.tolist(), target_quaternion)
         
         # Don't set movement_completed here - wait for trajectory completion callback
     
@@ -951,8 +1108,8 @@ def main(args=None):
                        help='Specific grasp point ID to use (if provided, will use grasp point instead of object center)')
     parser.add_argument('--offset', type=float, default=None,
                        help='Distance offset from object/grasp point in meters (default: 0.123m = 12.3cm)')
-    parser.add_argument('--mode', type=str, default='sim', choices=['sim', 'real'],
-                       help='Mode: "sim" for simulation (uses /objects_poses_sim with TFMessage), "real" for real robot (uses /objects_poses_real with TFMessage). Default: sim')
+    parser.add_argument('--mode', type=str, default=None, choices=['sim', 'real'], required=True,
+                       help='Mode: "sim" for simulation (uses /objects_poses_sim with TFMessage), "real" for real robot (uses /objects_poses_real with TFMessage). REQUIRED - no default.')
     
     # Parse arguments from sys.argv if args is None
     if args is None:

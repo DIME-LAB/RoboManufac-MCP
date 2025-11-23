@@ -161,11 +161,16 @@ class GraspPointsPublisher(Node):
             rot = transform.transform.rotation
 
             # Store the pose
+            stored_quat = np.array([rot.x, rot.y, rot.z, rot.w])
             self.object_poses[object_name] = {
                 'translation': np.array([trans.x, trans.y, trans.z]),
-                'quaternion': np.array([rot.x, rot.y, rot.z, rot.w]),
+                'quaternion': stored_quat,
                 'header': transform.header
             }
+            # Debug: Log when quaternion is stored
+            self.get_logger().debug(f"📥 Stored quaternion for {object_name}: "
+                                  f"q=[{stored_quat[0]:.6f}, {stored_quat[1]:.6f}, "
+                                  f"{stored_quat[2]:.6f}, {stored_quat[3]:.6f}]")
 
     def quaternion_to_rpy(self, x, y, z, w):
         """Convert quaternion to roll, pitch, yaw in degrees
@@ -217,7 +222,14 @@ class GraspPointsPublisher(Node):
         # Transform position to world frame
         pos_base = obj_translation + rot_matrix @ grasp_pos_transformed
 
-        # Grasp point inherits object's orientation
+        # Grasp point inherits object's orientation directly - no conversion needed
+        # 
+        # Note: The move_to_grasp code ensures the gripper is always pointing down
+        # (face-down, pitch=180°), so we can use the object's orientation as-is.
+        # The approach vector [0,0,1] defined in the JSON file only affects position
+        # transformation, not orientation. If grasp point orientation differs from
+        # object orientation in the future, the code will need to be updated to handle
+        # that transformation.
         quat_base = obj_quaternion
 
         return pos_base, quat_base
@@ -256,10 +268,11 @@ class GraspPointsPublisher(Node):
                     # Transform grasp point to base frame
                     pos_base, quat_base = self.transform_grasp_point(gp_local, object_pose)
                     
-                    # Calculate roll, pitch, yaw
-                    roll, pitch, yaw = self.quaternion_to_rpy(
-                        quat_base[0], quat_base[1], quat_base[2], quat_base[3]
-                    )
+                    # Debug: Log quaternion comparison
+                    stored_quat = object_pose['quaternion']
+                    if not np.allclose(quat_base, stored_quat, atol=1e-6):
+                        self.get_logger().warn(f"⚠️ Quaternion mismatch for {object_name_topic} grasp_id {gp_local.get('id')}: "
+                                             f"stored={stored_quat}, published={quat_base}")
                     
                     # Create GraspPoint message
                     grasp_point = GraspPoint()
@@ -273,7 +286,7 @@ class GraspPointsPublisher(Node):
                     grasp_point.grasp_id = gp_local.get('id', 0)
                     grasp_point.grasp_type = gp_local.get('type', 'center_point')
                     
-                    # Pose
+                    # Pose - position and orientation (quaternion) from object pose
                     grasp_point.pose.position.x = float(pos_base[0])
                     grasp_point.pose.position.y = float(pos_base[1])
                     grasp_point.pose.position.z = float(pos_base[2])
@@ -282,10 +295,10 @@ class GraspPointsPublisher(Node):
                     grasp_point.pose.orientation.z = float(quat_base[2])
                     grasp_point.pose.orientation.w = float(quat_base[3])
                     
-                    # Euler angles
-                    grasp_point.roll = float(roll)
-                    grasp_point.pitch = float(pitch)
-                    grasp_point.yaw = float(yaw)
+                    # Euler angles - always set to 0,0,0 (not used, quaternion is the source of truth)
+                    grasp_point.roll = 0.0
+                    grasp_point.pitch = 0.0
+                    grasp_point.yaw = 0.0
                     
                     grasp_array.grasp_points.append(grasp_point)
                     

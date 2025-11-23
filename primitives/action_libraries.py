@@ -162,3 +162,51 @@ def hover_over_grasp(target_pose, height, duration=3.0):
         # "traj0": move(target_position,null_rot,segment_duration), # hovers over target 
         "traj1": move(target_position,target_rot,segment_duration), # hovers over target, matching angle
     }
+def hover_over_grasp_quat(target_pose_quat, height, duration=3.0):
+    """
+    Quaternion-based version of hover_over_grasp - NO RPY CONVERSION.
+    
+    Args:
+        target_pose_quat: tuple (position, quaternion) where:
+            - position: [x, y, z] target position
+            - quaternion: [x, y, z, w] orientation in scipy convention (PURE QUATERNION!)
+        height: Z height for the movement
+        duration: time in seconds
+    
+    Returns:
+        trajectory dictionary compatible with execute_trajectory
+    
+    This function extracts yaw angle directly from the quaternion WITHOUT
+    converting to RPY angles, keeping quaternions as the primary representation.
+    Only converts to RPY at the IK solver boundary.
+    """
+    import numpy as np
+    from scipy.spatial.transform import Rotation as R
+    import math
+    
+    target_position = target_pose_quat[0].copy() if isinstance(target_pose_quat[0], list) else np.array(target_pose_quat[0]).tolist()
+    target_position[2] = height  # Set height to given value
+    
+    # Extract quaternion (scipy convention: [x, y, z, w])
+    target_quat = target_pose_quat[1]
+    q_x, q_y, q_z, q_w = target_quat
+    
+    # Extract YAW directly from quaternion WITHOUT RPY conversion
+    # For a quaternion representing face-down orientation, yaw is the rotation around Z-axis
+    # Yaw angle = 2 * atan2(z, w) - derived from quaternion math without Euler angle singularities
+    yaw_radians = 2.0 * math.atan2(q_z, q_w)
+    yaw_degrees = math.degrees(yaw_radians)
+    
+    # Normalize yaw to [-180, 180] range
+    yaw_degrees = ((yaw_degrees + 180) % 360) - 180
+    
+    # Create RPY for IK solver: face-down gripper (roll=0, pitch=180, yaw=extracted from quat)
+    fixed_roll = 0
+    fixed_pitch = 180
+    target_rot = [fixed_roll, fixed_pitch, yaw_degrees]
+    
+    segment_duration = duration
+    
+    return {
+        "traj1": move(target_position, target_rot, segment_duration),
+    }
