@@ -233,6 +233,9 @@ class DirectObjectMove(Node):
         self.latest_grasp_points = None
         self.selected_grasp_point = None
         
+        # Track final object pose for logging before exit
+        self.final_object_pose = None  # Store final object pose (PoseStamped) before exit
+        
         # Store current end-effector pose
         self.current_ee_pose = None
         self.ee_pose_received = False
@@ -286,7 +289,7 @@ class DirectObjectMove(Node):
                 self.get_logger().warn(f"⚠️ Grasp point mode requested but GraspPointArray not available. Falling back to object center.")
         
         # Add timer to control update frequency (same for both modes)
-        timer_period = 3.0
+        timer_period = 5.0
         self.update_timer = self.create_timer(timer_period, self.timer_callback)
         self.latest_pose = None
         self.movement_completed = False  # Flag to track if movement has been completed
@@ -317,6 +320,17 @@ class DirectObjectMove(Node):
         self.z_smoothing_alpha = 0.3  # Smoothing factor (0.0 = no change, 1.0 = immediate update)
         self.recovery_z_update_count = 0  # Count updates after recovery
         self.recovery_z_smoothing_steps = 5  # Number of steps to smooth Z after recovery
+        
+        # Canonical pose retry mechanism - adjust threshold instead of moving robot
+        self.canonical_retry_mode = False  # Flag to indicate we're retrying for canonical pose
+        self.canonical_retry_count = 0  # Number of retry attempts
+        self.max_canonical_retries = 10  # Maximum number of retries before giving up
+        self.canonical_threshold_initial = 0.1  # Initial strict threshold (~20°)
+        self.canonical_threshold_max = 0.5  # Maximum threshold to try (~100°)
+        self.canonical_threshold_increment = 0.05  # Increment threshold by this amount each retry
+        self.current_canonical_threshold = self.canonical_threshold_initial  # Current threshold being used
+        self.best_canonical_match = None  # Store best match found so far
+        self.best_canonical_distance = float('inf')  # Distance of best match
         
         # Action client for trajectory execution
         self.action_client = ActionClient(
@@ -496,6 +510,8 @@ class DirectObjectMove(Node):
             pose_stamped.pose.orientation.z = target_transform.transform.rotation.z
             pose_stamped.pose.orientation.w = target_transform.transform.rotation.w
             self.latest_pose = pose_stamped
+            # Track final object pose for logging
+            self.final_object_pose = pose_stamped
         else:
             # Object not found in this message
             self.latest_pose = None
@@ -503,6 +519,8 @@ class DirectObjectMove(Node):
     def pose_callback(self, msg):
         """Store latest pose message (fallback for PoseStamped)"""
         self.latest_pose = msg
+        # Track final object pose for logging
+        self.final_object_pose = msg
     
     def grasp_points_callback(self, msg):
         """Handle GraspPointArray message and find target grasp point"""
@@ -538,6 +556,9 @@ class DirectObjectMove(Node):
         """Process pose and perform movement to object"""
         if self.movement_completed:
             return
+        
+        # Handle canonical pose retry mode - adjust threshold instead of moving robot
+        # Threshold adjustment happens in canonical match checking, so we just continue to normal processing
         
         # Wait for trajectory to complete before sending new one (same for both modes)
         if self.trajectory_in_progress:
@@ -598,28 +619,67 @@ class DirectObjectMove(Node):
             # Use provided target quaternion and apply fold symmetry matching
             provided_quat = np.array(self.target_xyzw)
             
-            # Normalize to canonical pose using fold symmetry (validation only)
-            canonical_quat = self.quat_controller.normalize_to_canonical(
-                provided_quat, self.object_name, self.symmetry_dir, threshold=0.1
-            )
-            
-            # Check if canonical match was found
-            canonical_match = not np.array_equal(
-                canonical_quat / np.linalg.norm(canonical_quat),
-                provided_quat / np.linalg.norm(provided_quat)
+            # Try to find canonical match with increasing thresholds
+            canonical_quat, canonical_match, match_distance = self._try_canonical_match_with_threshold(
+                provided_quat, self.object_name
             )
             
             # Extract yaw from canonical quaternion if match found, otherwise from provided quaternion
-            # When canonical match is found, the canonical quaternion is the normalized equivalent
-            # of the provided orientation, so we extract yaw from it for consistency
             if canonical_match:
                 object_yaw = self.quat_controller.extract_yaw_from_quaternion(canonical_quat)
-                match_status = "✅ Canonical match"
+                match_status = f"✅ Canonical match (threshold: {self.current_canonical_threshold:.3f}, distance: {match_distance:.4f})"
                 yaw_source = "canonical quaternion (fold symmetry normalized)"
+                # Exit retry mode if we were in it, but keep the threshold that worked
+                if self.canonical_retry_mode:
+                    self.get_logger().info(f"✅ Canonical match found with threshold {self.current_canonical_threshold:.3f}! Keeping threshold for future detections.")
+                    self.canonical_retry_mode = False
+                    self.canonical_retry_count = 0
+                    # Keep current_canonical_threshold - don't reset it!
+                    self.best_canonical_match = None
+                    self.best_canonical_distance = float('inf')
             else:
-                object_yaw = self.quat_controller.extract_yaw_from_quaternion(provided_quat)
-                match_status = "⚠️ No canonical match (using provided)"
-                yaw_source = "provided quaternion"
+                # No canonical match - trigger retry mode or continue retrying
+                if not self.canonical_retry_mode:
+                    self.get_logger().warn("⚠️ No canonical match found. Starting threshold adjustment...")
+                    self.canonical_retry_mode = True
+                    self.canonical_retry_count = 0
+                    self.current_canonical_threshold = self.canonical_threshold_initial
+                    self.best_canonical_match = None
+                    self.best_canonical_distance = float('inf')
+                    return  # Exit early to trigger retry
+                
+                # Already in retry mode - increment threshold and try again
+                self.canonical_retry_count += 1
+                if self.current_canonical_threshold < self.canonical_threshold_max:
+                    self.current_canonical_threshold = min(
+                        self.current_canonical_threshold + self.canonical_threshold_increment,
+                        self.canonical_threshold_max
+                    )
+                    self.get_logger().info(f"🔄 Retry {self.canonical_retry_count}/{self.max_canonical_retries}: Adjusting threshold to {self.current_canonical_threshold:.3f}...")
+                    return  # Try again with new threshold
+                else:
+                    # Max threshold reached - use best match found or fallback
+                    if self.best_canonical_match is not None:
+                        self.get_logger().warn(f"⚠️ Using best match found (distance: {self.best_canonical_distance:.4f}) as canonical pose.")
+                        canonical_quat = self.best_canonical_match
+                        object_yaw = self.quat_controller.extract_yaw_from_quaternion(canonical_quat)
+                        match_status = f"⚠️ Using best canonical match (distance: {self.best_canonical_distance:.4f})"
+                        yaw_source = "best canonical quaternion found"
+                        self.canonical_retry_mode = False
+                        self.canonical_retry_count = 0
+                        # Keep the threshold that gave us the best match (don't reset to initial)
+                        self.best_canonical_match = None
+                        self.best_canonical_distance = float('inf')
+                    else:
+                        self.get_logger().error(f"❌ Max threshold ({self.canonical_threshold_max:.3f}) reached. Using provided quaternion as fallback.")
+                        self.canonical_retry_mode = False
+                        object_yaw = self.quat_controller.extract_yaw_from_quaternion(provided_quat)
+                        match_status = "⚠️ No canonical match (using provided - max threshold exceeded)"
+                        yaw_source = "provided quaternion"
+                        # Reset threshold only when we completely fail
+                        self.current_canonical_threshold = self.canonical_threshold_initial
+                        self.best_canonical_match = None
+                        self.best_canonical_distance = float('inf')
             
             target_quaternion = self.quat_controller.face_down_quaternion(object_yaw)
             
@@ -704,28 +764,75 @@ class DirectObjectMove(Node):
                     self.selected_grasp_point.pose.orientation.w
                 ])
                 
-                # Normalize to canonical pose using fold symmetry (validation only)
-                canonical_quat = self.quat_controller.normalize_to_canonical(
-                    grasp_point_quat, self.object_name, self.symmetry_dir, threshold=0.1
-                )
-                
-                # Check if canonical match was found
-                canonical_match = not np.array_equal(
-                    canonical_quat / np.linalg.norm(canonical_quat),
-                    grasp_point_quat / np.linalg.norm(grasp_point_quat)
+                # Try to find canonical match with increasing thresholds
+                canonical_quat, canonical_match, match_distance = self._try_canonical_match_with_threshold(
+                    grasp_point_quat, self.object_name
                 )
                 
                 # Extract yaw from canonical quaternion if match found, otherwise from detected quaternion
-                # When canonical match is found, the canonical quaternion is the normalized equivalent
-                # of the detected orientation, so we extract yaw from it for consistency
                 if canonical_match:
                     grasp_point_yaw = self.quat_controller.extract_yaw_from_quaternion(canonical_quat)
-                    match_status = "✅ Canonical match"
+                    match_status = f"✅ Canonical match (threshold: {self.current_canonical_threshold:.3f}, distance: {match_distance:.4f})"
                     yaw_source = "canonical quaternion (fold symmetry normalized)"
+                    # Exit retry mode if we were in it, but keep the threshold that worked
+                    if self.canonical_retry_mode:
+                        self.get_logger().info(f"✅ Canonical match found with threshold {self.current_canonical_threshold:.3f}! Keeping threshold for future detections.")
+                        self.canonical_retry_mode = False
+                        self.canonical_retry_count = 0
+                        # Keep current_canonical_threshold - don't reset it!
+                        self.best_canonical_match = None
+                        self.best_canonical_distance = float('inf')
                 else:
-                    grasp_point_yaw = self.quat_controller.extract_yaw_from_quaternion(grasp_point_quat)
-                    match_status = "⚠️ No canonical match (using grasp point)"
-                    yaw_source = "detected quaternion"
+                    # No canonical match - trigger retry mode or continue retrying
+                    if not self.canonical_retry_mode:
+                        self.get_logger().warn(f"⚠️ No canonical match found with current threshold {self.current_canonical_threshold:.3f}. Starting threshold adjustment...")
+                        self.canonical_retry_mode = True
+                        self.canonical_retry_count = 0
+                        # Start from current threshold (which might be higher than initial if we had a previous match)
+                        # Only reset to initial if we're starting fresh
+                        if self.current_canonical_threshold == self.canonical_threshold_initial:
+                            # Already at initial, start incrementing
+                            pass
+                        else:
+                            # We had a higher threshold that worked before, but now it doesn't work
+                            # Try incrementing from current threshold
+                            self.get_logger().info(f"📊 Previous threshold {self.current_canonical_threshold:.3f} no longer works, incrementing...")
+                        self.best_canonical_match = None
+                        self.best_canonical_distance = float('inf')
+                        return  # Exit early to trigger retry
+                    
+                    # Already in retry mode - increment threshold and try again
+                    self.canonical_retry_count += 1
+                    if self.current_canonical_threshold < self.canonical_threshold_max:
+                        self.current_canonical_threshold = min(
+                            self.current_canonical_threshold + self.canonical_threshold_increment,
+                            self.canonical_threshold_max
+                        )
+                        self.get_logger().info(f"🔄 Retry {self.canonical_retry_count}/{self.max_canonical_retries}: Adjusting threshold to {self.current_canonical_threshold:.3f}...")
+                        return  # Try again with new threshold
+                    else:
+                        # Max threshold reached - use best match found or fallback
+                        if self.best_canonical_match is not None:
+                            self.get_logger().warn(f"⚠️ Using best match found (distance: {self.best_canonical_distance:.4f}) as canonical pose.")
+                            canonical_quat = self.best_canonical_match
+                            grasp_point_yaw = self.quat_controller.extract_yaw_from_quaternion(canonical_quat)
+                            match_status = f"⚠️ Using best canonical match (distance: {self.best_canonical_distance:.4f})"
+                            yaw_source = "best canonical quaternion found"
+                            self.canonical_retry_mode = False
+                            self.canonical_retry_count = 0
+                            # Keep the threshold that gave us the best match (don't reset to initial)
+                            self.best_canonical_match = None
+                            self.best_canonical_distance = float('inf')
+                        else:
+                            self.get_logger().error(f"❌ Max threshold ({self.canonical_threshold_max:.3f}) reached. Using grasp point quaternion as fallback.")
+                            self.canonical_retry_mode = False
+                            grasp_point_yaw = self.quat_controller.extract_yaw_from_quaternion(grasp_point_quat)
+                            match_status = "⚠️ No canonical match (using grasp point - max threshold exceeded)"
+                            yaw_source = "detected quaternion"
+                            # Reset threshold only when we completely fail
+                            self.current_canonical_threshold = self.canonical_threshold_initial
+                            self.best_canonical_match = None
+                            self.best_canonical_distance = float('inf')
                 
                 # Create face-down quaternion with grasp point yaw (QUATERNION-BASED, no gimbal lock)
                 target_quaternion = self.quat_controller.face_down_quaternion(grasp_point_yaw)
@@ -790,27 +897,72 @@ class DirectObjectMove(Node):
                 self.latest_pose.pose.orientation.w
             ])
             
-            # Normalize to canonical pose using fold symmetry matching
-            # This tells us if the detected pose matches a canonical pose (for validation)
-            canonical_quat = self.quat_controller.normalize_to_canonical(
-                detected_object_quat, self.object_name, self.symmetry_dir, threshold=0.1
-            )
-            
-            # Check if canonical match was found
-            canonical_match = not np.array_equal(
-                canonical_quat / np.linalg.norm(canonical_quat),
-                detected_object_quat / np.linalg.norm(detected_object_quat)
+            # Try to find canonical match with increasing thresholds
+            canonical_quat, canonical_match, match_distance = self._try_canonical_match_with_threshold(
+                detected_object_quat, self.object_name
             )
             
             # Extract yaw from canonical quaternion if match found, otherwise from detected quaternion
-            # When canonical match is found, the canonical quaternion is the normalized equivalent
-            # of the detected orientation, so we extract yaw from it for consistency
             if canonical_match:
                 object_yaw = self.quat_controller.extract_yaw_from_quaternion(canonical_quat)
                 yaw_source = "canonical quaternion (fold symmetry normalized)"
+                # Exit retry mode if we were in it, but keep the threshold that worked
+                if self.canonical_retry_mode:
+                    self.get_logger().info(f"✅ Canonical match found with threshold {self.current_canonical_threshold:.3f}! Keeping threshold for future detections.")
+                    self.canonical_retry_mode = False
+                    self.canonical_retry_count = 0
+                    # Keep current_canonical_threshold - don't reset it!
+                    self.best_canonical_match = None
+                    self.best_canonical_distance = float('inf')
             else:
-                object_yaw = self.quat_controller.extract_yaw_from_quaternion(detected_object_quat)
-                yaw_source = "detected quaternion"
+                # No canonical match - trigger retry mode or continue retrying
+                if not self.canonical_retry_mode:
+                    self.get_logger().warn(f"⚠️ No canonical match found with current threshold {self.current_canonical_threshold:.3f}. Starting threshold adjustment...")
+                    self.canonical_retry_mode = True
+                    self.canonical_retry_count = 0
+                    # Start from current threshold (which might be higher than initial if we had a previous match)
+                    # Only reset to initial if we're starting fresh
+                    if self.current_canonical_threshold == self.canonical_threshold_initial:
+                        # Already at initial, start incrementing
+                        pass
+                    else:
+                        # We had a higher threshold that worked before, but now it doesn't work
+                        # Try incrementing from current threshold
+                        self.get_logger().info(f"📊 Previous threshold {self.current_canonical_threshold:.3f} no longer works, incrementing...")
+                    self.best_canonical_match = None
+                    self.best_canonical_distance = float('inf')
+                    return  # Exit early to trigger retry
+                
+                # Already in retry mode - increment threshold and try again
+                self.canonical_retry_count += 1
+                if self.current_canonical_threshold < self.canonical_threshold_max:
+                    self.current_canonical_threshold = min(
+                        self.current_canonical_threshold + self.canonical_threshold_increment,
+                        self.canonical_threshold_max
+                    )
+                    self.get_logger().info(f"🔄 Retry {self.canonical_retry_count}/{self.max_canonical_retries}: Adjusting threshold to {self.current_canonical_threshold:.3f}...")
+                    return  # Try again with new threshold
+                else:
+                    # Max threshold reached - use best match found or fallback
+                    if self.best_canonical_match is not None:
+                        self.get_logger().warn(f"⚠️ Using best match found (distance: {self.best_canonical_distance:.4f}) as canonical pose.")
+                        canonical_quat = self.best_canonical_match
+                        object_yaw = self.quat_controller.extract_yaw_from_quaternion(canonical_quat)
+                        yaw_source = "best canonical quaternion found"
+                        self.canonical_retry_mode = False
+                        self.canonical_retry_count = 0
+                        # Keep the threshold that gave us the best match (don't reset to initial)
+                        self.best_canonical_match = None
+                        self.best_canonical_distance = float('inf')
+                    else:
+                        self.get_logger().error(f"❌ Max threshold ({self.canonical_threshold_max:.3f}) reached. Using detected quaternion as fallback.")
+                        self.canonical_retry_mode = False
+                        object_yaw = self.quat_controller.extract_yaw_from_quaternion(detected_object_quat)
+                        yaw_source = "detected quaternion"
+                        # Reset threshold only when we completely fail
+                        self.current_canonical_threshold = self.canonical_threshold_initial
+                        self.best_canonical_match = None
+                        self.best_canonical_distance = float('inf')
             
             # Apply calibration offset to correct systematic detection bias (only for real mode)
             if self.mode == 'real':
@@ -1081,6 +1233,69 @@ class DirectObjectMove(Node):
         self._get_result_future = goal_handle.get_result_async()
         self._get_result_future.add_done_callback(self.goal_result)
 
+    def _try_canonical_match_with_threshold(self, detected_quat, object_name):
+        """
+        Try to find canonical match with current threshold, tracking best match found.
+        
+        Returns:
+            Tuple of (canonical_quat, match_found, distance)
+        """
+        # Use normalize_to_canonical which internally calls find_closest_canonical_quaternion
+        # But we need to get the distance, so we'll call find_closest_canonical_quaternion directly
+        from quaternion_orientation_controller import QuaternionOrientationController
+        
+        # Load fold symmetry data
+        fold_data = QuaternionOrientationController.load_fold_symmetry_json(object_name, self.symmetry_dir)
+        
+        if fold_data is None:
+            # No symmetry data, return detected as-is
+            detected_quat = np.array(detected_quat)
+            detected_quat = detected_quat / np.linalg.norm(detected_quat)
+            return detected_quat, False, float('inf')
+        
+        # Find closest canonical with current threshold
+        canonical_quat, symmetry_used, distance = \
+            QuaternionOrientationController.find_closest_canonical_quaternion(
+                detected_quat, fold_data, self.current_canonical_threshold
+            )
+        
+        # Also find the absolute best match (with very high threshold) to track best overall
+        best_canonical_quat, best_symmetry, best_distance_abs = \
+            QuaternionOrientationController.find_closest_canonical_quaternion(
+                detected_quat, fold_data, 1.0  # Very high threshold to always get best match
+            )
+        
+        # Track best match found so far (use absolute best)
+        if best_distance_abs < self.best_canonical_distance:
+            self.best_canonical_distance = best_distance_abs
+            if best_canonical_quat is not None:
+                self.best_canonical_match = best_canonical_quat.copy()
+        
+        if canonical_quat is not None:
+            return canonical_quat, True, distance
+        else:
+            # No match within threshold, return detected normalized
+            detected_quat = np.array(detected_quat)
+            detected_quat = detected_quat / np.linalg.norm(detected_quat)
+            return detected_quat, False, distance
+    
+    def _print_final_object_pose(self):
+        """Print the final object pose recorded before exit"""
+        self.get_logger().info("=" * 80)
+        self.get_logger().info("📊 FINAL OBJECT POSE RECORDED:")
+        
+        if self.final_object_pose is not None:
+            # Print object detection pose (regardless of mode)
+            pose = self.final_object_pose
+            self.get_logger().info(f"   Object: {self.object_name}")
+            self.get_logger().info(f"   Position: x={pose.pose.position.x:.6f}, y={pose.pose.position.y:.6f}, z={pose.pose.position.z:.6f}")
+            self.get_logger().info(f"   Orientation (quaternion): x={pose.pose.orientation.x:.6f}, y={pose.pose.orientation.y:.6f}, "
+                                 f"z={pose.pose.orientation.z:.6f}, w={pose.pose.orientation.w:.6f}")
+        else:
+            self.get_logger().warn("   ⚠️ No final object pose recorded (pose data not available)")
+        
+        self.get_logger().info("=" * 80)
+    
     def goal_result(self, future):
         """Handle goal result (used for both sim and real modes)"""
         result = future.result()
@@ -1101,10 +1316,14 @@ class DirectObjectMove(Node):
         else:
             self.get_logger().error(f"Trajectory failed with status: {result.status}")
         
+        # Print final object pose before exiting
+        self._print_final_object_pose()
+        
         # Set exit flags after trajectory completes (or if step 2 completed)
         self.movement_completed = True
         self.should_exit = True
         self.get_logger().info("✅ Direct movement completed. Exiting.")
+    
 
 
 def main(args=None):
