@@ -5,6 +5,13 @@ Quaternion Orientation Controller - Gimbal Lock Free Gripper Control
 This module provides a quaternion-based approach to gripper orientation control,
 avoiding gimbal lock singularities that occur at pitch=180° when using Euler angles (RPY).
 
+FOLD SYMMETRY EXPLANATION:
+- The JSON files store discrete orientations where the object looks IDENTICAL
+- For a line with 2-fold Z symmetry: orientations at 0° and 180° around Z look the same
+- For a fork with 2-fold Y symmetry: orientations at 0° and 180° around Y look the same
+- The goal: find which canonical orientation the detected pose is equivalent to,
+  then use that canonical's yaw for gripper alignment
+
 Key Insight:
 - Euler angles have a singularity at pitch = ±90° (gimbal lock)
 - At pitch=180°, the roll and yaw axes become colinear, losing one degree of freedom
@@ -13,7 +20,6 @@ Key Insight:
 
 Reference:
 - scipy.spatial.transform.Rotation uses [x, y, z, w] convention
-- NOT [w, x, y, z] - verify with your system's expected format
 """
 
 import numpy as np
@@ -48,7 +54,6 @@ class QuaternionOrientationController:
             
         Example:
             q = face_down_quaternion(45.0)  # Yaw 45°, pitch 180°, roll 0°
-            # Returns: [0.923880, 0.0, 0.0, 0.382683] (approximately)
         """
         # Create face-down orientation with yaw rotation
         # Using scipy's Rotation which handles gimbal lock internally
@@ -63,18 +68,14 @@ class QuaternionOrientationController:
         """
         Multiply two quaternions to compose rotations.
         
-        Useful for combining multiple rotations.
+        Result represents: first apply q1, then apply q2
+        (Note: quaternion multiplication order matters!)
         
         Args:
             q1, q2: quaternions in [x, y, z, w] format
             
         Returns:
             Result quaternion [x, y, z, w]
-            
-        Example:
-            q_face_down = face_down_quaternion(0)
-            q_rotate_45 = from_euler('z', 45, degrees=True).as_quat()
-            q_combined = quaternion_multiply(q_face_down, q_rotate_45)
         """
         r1 = R.from_quat(q1)
         r2 = R.from_quat(q2)
@@ -115,13 +116,6 @@ class QuaternionOrientationController:
                
         Returns:
             Interpolated quaternion [x, y, z, w]
-            
-        Example:
-            q1 = face_down_quaternion(0)
-            q2 = face_down_quaternion(90)
-            for t in [0.0, 0.25, 0.5, 0.75, 1.0]:
-                q_interp = slerp(q1, q2, t)
-                # Smooth transition from 0° to 90° yaw
         """
         r1 = R.from_quat(q1)
         r2 = R.from_quat(q2)
@@ -155,6 +149,7 @@ class QuaternionOrientationController:
         Returns:
             Normalized quaternion [x, y, z, w]
         """
+        q = np.array(q)
         magnitude = np.linalg.norm(q)
         if magnitude < 1e-10:
             raise ValueError(f"Cannot normalize zero quaternion: {q}")
@@ -166,14 +161,6 @@ class QuaternionOrientationController:
         Convert quaternion to Euler angles (RPY in degrees).
         
         ⚠️ CAUTION: Use this ONLY at I/O boundaries for logging/display!
-        
-        Converting FROM quaternion TO RPY for intermediate calculations
-        defeats the purpose of using quaternions. This method exists for:
-        - Converting input/output at ROS message boundaries
-        - Displaying orientation for logging
-        - Reading external orientation values
-        
-        DO NOT use this inside calculation loops or trajectory generation!
         
         Args:
             q: quaternion [x, y, z, w] in scipy convention
@@ -191,11 +178,6 @@ class QuaternionOrientationController:
         Convert Euler angles (RPY) to quaternion.
         
         ⚠️ CAUTION: Only use at I/O boundaries!
-        
-        Use this to convert external RPY inputs (from ROS messages, files, etc.)
-        to quaternion representation for processing.
-        
-        DO NOT use this for intermediate calculations or conversions!
         
         Args:
             roll_deg: Roll in degrees
@@ -221,6 +203,7 @@ class QuaternionOrientationController:
         Returns:
             Inverse quaternion [x, y, z, w]
         """
+        q = np.array(q)
         return np.array([-q[0], -q[1], -q[2], q[3]])
     
     @staticmethod
@@ -230,6 +213,9 @@ class QuaternionOrientationController:
         
         Uses dot product: distance = 1 - abs(dot(q1, q2))
         For unit quaternions, this gives angular distance in [0, 1]
+        where 0 = identical orientation, 1 = 180° apart
+        
+        Note: abs() handles quaternion double-cover (q and -q represent same rotation)
         
         Args:
             q1, q2: quaternions [x, y, z, w]
@@ -237,18 +223,38 @@ class QuaternionOrientationController:
         Returns:
             Distance in [0, 1] where 0 = identical, 1 = opposite
         """
-        q1_norm = q1 / np.linalg.norm(q1)
-        q2_norm = q2 / np.linalg.norm(q2)
+        q1_norm = np.array(q1) / np.linalg.norm(q1)
+        q2_norm = np.array(q2) / np.linalg.norm(q2)
         dot_product = abs(np.dot(q1_norm, q2_norm))
+        # Clamp to handle numerical errors
+        dot_product = min(1.0, dot_product)
         return 1.0 - dot_product
+    
+    @staticmethod
+    def quaternion_angle_degrees(q1, q2):
+        """
+        Calculate angular difference between two quaternions in degrees.
+        
+        Args:
+            q1, q2: quaternions [x, y, z, w]
+            
+        Returns:
+            Angle in degrees [0, 180]
+        """
+        q1_norm = np.array(q1) / np.linalg.norm(q1)
+        q2_norm = np.array(q2) / np.linalg.norm(q2)
+        dot_product = abs(np.dot(q1_norm, q2_norm))
+        dot_product = min(1.0, dot_product)
+        angle_rad = 2.0 * math.acos(dot_product)
+        return math.degrees(angle_rad)
     
     @staticmethod
     def extract_yaw_from_quaternion(q):
         """
-        Extract yaw angle directly from quaternion (NO RPY conversion).
+        Extract yaw angle from quaternion using proper Euler decomposition.
         
-        For face-down quaternions (pitch=180°), uses: 2.0 * atan2(q_z, q_w)
-        For other quaternions where q_z and q_w are near zero, uses standard conversion.
+        This extracts the Z-axis rotation component from any quaternion.
+        Works correctly regardless of the quaternion's roll/pitch values.
         
         Args:
             q: quaternion [x, y, z, w]
@@ -256,21 +262,13 @@ class QuaternionOrientationController:
         Returns:
             yaw in degrees, normalized to [-180, 180]
         """
-        q_x, q_y, q_z, q_w = q
+        # Use scipy's robust Euler extraction
+        r = R.from_quat(q)
+        # Extract as ZYX to get yaw as the first angle (most stable)
+        # Then convert to our XYZ convention
+        euler_xyz = r.as_euler('xyz', degrees=True)
+        yaw_degrees = euler_xyz[2]  # Z component in XYZ
         
-        # Check if q_z and q_w are both near zero (not a face-down quaternion)
-        # Use a threshold to detect when the face-down formula would be unreliable
-        threshold = 1e-6
-        if abs(q_z) < threshold and abs(q_w) < threshold:
-            # Fallback: use standard quaternion-to-Euler conversion for yaw
-            sin_y = 2.0 * (q_w * q_z + q_x * q_y)
-            cos_y = 1.0 - 2.0 * (q_y * q_y + q_z * q_z)
-            yaw_radians = math.atan2(sin_y, cos_y)
-        else:
-            # Standard formula for face-down quaternions (pitch=180°)
-            yaw_radians = 2.0 * math.atan2(q_z, q_w)
-        
-        yaw_degrees = math.degrees(yaw_radians)
         # Normalize to [-180, 180]
         yaw_degrees = ((yaw_degrees + 180) % 360) - 180
         return yaw_degrees
@@ -278,12 +276,13 @@ class QuaternionOrientationController:
     @staticmethod
     def load_fold_symmetry_json(object_name, symmetry_dir):
         """
-        Load fold symmetry JSON file for an object using pattern matching.
+        Load fold symmetry JSON file for an object.
         
-        Searches for files matching pattern: {object_name}_*_symmetry.json
+        Searches for file: {symmetry_dir}/{object_name}_symmetry.json
+        Also tries pattern: {object_name}*_symmetry.json
         
         Args:
-            object_name: Name of the object (e.g., "line_red")
+            object_name: Name of the object (e.g., "fork_yellow_scaled70")
             symmetry_dir: Directory containing symmetry JSON files
             
         Returns:
@@ -293,147 +292,340 @@ class QuaternionOrientationController:
         import os
         import glob
         
-        # Pattern match: {object_name}_*_symmetry.json
-        pattern = os.path.join(symmetry_dir, f"{object_name}_*_symmetry.json")
+        # Try exact match first
+        exact_path = os.path.join(symmetry_dir, f"{object_name}_symmetry.json")
+        if os.path.exists(exact_path):
+            try:
+                with open(exact_path, 'r') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"Error loading fold symmetry JSON from {exact_path}: {e}")
+                return None
+        
+        # Try pattern match
+        pattern = os.path.join(symmetry_dir, f"{object_name}*_symmetry.json")
         matching_files = glob.glob(pattern)
+        
+        if not matching_files:
+            # Try without _scaled70 suffix
+            base_name = object_name.replace('_scaled70', '')
+            pattern = os.path.join(symmetry_dir, f"{base_name}*_symmetry.json")
+            matching_files = glob.glob(pattern)
         
         if not matching_files:
             return None
         
-        # Use first match (should typically be only one)
+        # Use first match
         json_path = matching_files[0]
         
         try:
             with open(json_path, 'r') as f:
-                fold_data = json.load(f)
-            return fold_data
+                return json.load(f)
         except (json.JSONDecodeError, IOError) as e:
             print(f"Error loading fold symmetry JSON from {json_path}: {e}")
             return None
     
     @staticmethod
-    def find_canonical_quaternion(detected_quat, fold_data, threshold=0.1):
+    def get_symmetry_rotations(fold_data):
         """
-        Find canonical quaternion match using transformation-based algorithm.
+        Extract all symmetry rotation quaternions from fold data.
         
-        Algorithm:
-        1. Calculate transform from detected to identity: transform = identity * inverse(detected)
-        2. Apply transform to all canonical quaternions from all fold axes
-        3. Find closest match using quaternion distance
-        4. Return original canonical quaternion if match found (within threshold), else None
+        The JSON stores quaternions that represent rotations where the object
+        looks identical. These are the symmetry group elements.
         
         Args:
-            detected_quat: Detected object quaternion [x, y, z, w]
             fold_data: Dictionary with fold symmetry data from JSON
-            threshold: Maximum distance for a match (default 0.1)
             
         Returns:
-            Canonical quaternion [x, y, z, w] if match found, else None
+            List of quaternion arrays [x, y, z, w] representing symmetry rotations
         """
-        # Normalize detected quaternion
-        detected_quat = np.array(detected_quat)
-        detected_quat = detected_quat / np.linalg.norm(detected_quat)
+        symmetry_rotations = []
+        seen = set()  # To avoid duplicates
         
-        # 1. Collect all canonical quaternions from all fold axes
-        all_canonicals = []
         for axis in ['x', 'y', 'z']:
             if axis not in fold_data.get('fold_axes', {}):
                 continue
-            for q_data in fold_data['fold_axes'][axis]['quaternions']:
+            
+            axis_data = fold_data['fold_axes'][axis]
+            for q_data in axis_data.get('quaternions', []):
                 q = np.array([
                     q_data['quaternion']['x'],
                     q_data['quaternion']['y'],
                     q_data['quaternion']['z'],
                     q_data['quaternion']['w']
                 ])
-                # Normalize canonical quaternion
                 q = q / np.linalg.norm(q)
-                all_canonicals.append(q)
+                
+                # Create hashable key (rounded to avoid float comparison issues)
+                key = tuple(np.round(q, 6))
+                neg_key = tuple(np.round(-q, 6))  # q and -q are same rotation
+                
+                if key not in seen and neg_key not in seen:
+                    seen.add(key)
+                    symmetry_rotations.append(q)
         
-        if not all_canonicals:
-            return None
-        
-        # 2. Calculate transform from detected to identity
-        identity = np.array([0, 0, 0, 1])
-        detected_inverse = QuaternionOrientationController.quaternion_inverse(detected_quat)
-        transform = QuaternionOrientationController.quaternion_multiply(identity, detected_inverse)
-        
-        # 3. Apply transform to all canonicals
-        transformed_canonicals = []
-        for q in all_canonicals:
-            transformed_q = QuaternionOrientationController.quaternion_multiply(transform, q)
-            transformed_canonicals.append(transformed_q)
-        
-        # 4. Find closest match
-        min_distance = float('inf')
-        closest_idx = -1
-        
-        for i, transformed_q in enumerate(transformed_canonicals):
-            distance = QuaternionOrientationController.quaternion_distance(detected_quat, transformed_q)
-            if distance < min_distance:
-                min_distance = distance
-                closest_idx = i
-        
-        # 5. Return original canonical if match found
-        if min_distance < threshold:
-            return all_canonicals[closest_idx]
-        else:
-            return None
+        return symmetry_rotations
     
     @staticmethod
-    def normalize_to_canonical(detected_quat, object_name, symmetry_dir, threshold=0.1):
+    def generate_full_symmetry_group(fold_data):
         """
-        Normalize detected quaternion to canonical pose using fold symmetry.
+        Generate the full symmetry group by combining rotations from all axes.
         
-        Main entry point for fold symmetry matching. Loads symmetry data and
-        finds canonical match. If match found, returns canonical quaternion;
-        otherwise returns detected quaternion.
+        For objects with symmetry on multiple axes, we need to generate
+        all combinations of symmetry rotations (the group closure).
+        
+        Args:
+            fold_data: Dictionary with fold symmetry data from JSON
+            
+        Returns:
+            List of quaternion arrays representing all symmetry transformations
+        """
+        base_rotations = QuaternionOrientationController.get_symmetry_rotations(fold_data)
+        
+        if len(base_rotations) <= 1:
+            return base_rotations
+        
+        # Generate group closure by repeatedly combining elements
+        group = set()
+        for q in base_rotations:
+            key = tuple(np.round(q, 6))
+            group.add(key)
+        
+        # Iterate to find closure (typically converges in 2-3 iterations)
+        changed = True
+        max_iterations = 10
+        iteration = 0
+        
+        while changed and iteration < max_iterations:
+            changed = False
+            iteration += 1
+            new_elements = set()
+            
+            group_list = [np.array(k) for k in group]
+            for q1 in group_list:
+                for q2 in group_list:
+                    # Combine: q1 * q2
+                    q_combined = QuaternionOrientationController.quaternion_multiply(q1, q2)
+                    q_combined = q_combined / np.linalg.norm(q_combined)
+                    
+                    key = tuple(np.round(q_combined, 6))
+                    neg_key = tuple(np.round(-q_combined, 6))
+                    
+                    if key not in group and neg_key not in group:
+                        new_elements.add(key)
+                        changed = True
+            
+            group.update(new_elements)
+        
+        return [np.array(k) for k in group]
+    
+    @staticmethod
+    def find_equivalent_canonical_yaw(detected_quat, fold_data, threshold_degrees=15.0):
+        """
+        Find the canonical yaw that is symmetry-equivalent to the detected orientation.
+        
+        Algorithm:
+        1. Extract the detected object's yaw
+        2. Get all symmetry rotations from fold data
+        3. For each symmetry rotation, calculate what yaw it would map to
+        4. Find which symmetry-equivalent yaw is in the "canonical" range
+        5. Return that canonical yaw for gripper alignment
+        
+        For most grasping applications, we want the yaw normalized to a 
+        consistent range (e.g., [-90, 90] or [0, 180]) based on symmetry.
         
         Args:
             detected_quat: Detected object quaternion [x, y, z, w]
-            object_name: Name of the object (e.g., "line_red")
-            symmetry_dir: Directory containing symmetry JSON files
-            threshold: Maximum distance for a match (default 0.1)
+            fold_data: Dictionary with fold symmetry data
+            threshold_degrees: Not used in this algorithm (kept for API compatibility)
             
         Returns:
-            Canonical quaternion [x, y, z, w] if match found, else detected_quat
+            Canonical yaw in degrees (normalized based on object's symmetry)
+        """
+        detected_quat = np.array(detected_quat)
+        detected_quat = detected_quat / np.linalg.norm(detected_quat)
+        
+        # Extract detected yaw
+        detected_yaw = QuaternionOrientationController.extract_yaw_from_quaternion(detected_quat)
+        
+        # Get symmetry info for Z-axis (yaw symmetry)
+        z_fold = 1  # Default: no symmetry
+        if 'fold_axes' in fold_data and 'z' in fold_data['fold_axes']:
+            z_fold = fold_data['fold_axes']['z'].get('fold', 1)
+        
+        # Calculate canonical yaw based on fold symmetry
+        # For n-fold symmetry around Z, equivalent yaws are: yaw, yaw+360/n, yaw+2*360/n, ...
+        if z_fold > 1:
+            # Normalize yaw to canonical range [0, 360/z_fold)
+            period = 360.0 / z_fold
+            canonical_yaw = detected_yaw % period
+            
+            # Optionally center around zero: [-period/2, period/2)
+            if canonical_yaw > period / 2:
+                canonical_yaw -= period
+        else:
+            # No Z symmetry, use detected yaw as-is (normalized to [-180, 180])
+            canonical_yaw = detected_yaw
+        
+        return canonical_yaw
+    
+    @staticmethod
+    def find_closest_canonical_quaternion(detected_quat, fold_data, threshold=0.15):
+        """
+        Find the closest canonical quaternion to the detected orientation.
+        
+        Algorithm:
+        1. Get all symmetry rotation quaternions from fold_data
+        2. Apply each symmetry rotation to the detected quaternion
+        3. Find which transformed quaternion is closest to identity (or any reference)
+        4. Return the symmetry rotation that achieved the best match
+        
+        This tells us which "canonical view" of the object we're seeing.
+        
+        Args:
+            detected_quat: Detected object quaternion [x, y, z, w]
+            fold_data: Dictionary with fold symmetry data from JSON
+            threshold: Maximum quaternion distance for a valid match (0-1 scale)
+            
+        Returns:
+            Tuple of (canonical_quat, symmetry_rotation, distance) or (None, None, inf) if no match
+        """
+        detected_quat = np.array(detected_quat)
+        detected_quat = detected_quat / np.linalg.norm(detected_quat)
+        
+        # Get all symmetry rotations
+        symmetry_rotations = QuaternionOrientationController.generate_full_symmetry_group(fold_data)
+        
+        if not symmetry_rotations:
+            # No symmetry data, return detected as canonical
+            return detected_quat, np.array([0, 0, 0, 1]), 0.0
+        
+        # Identity quaternion (reference canonical pose)
+        identity = np.array([0, 0, 0, 1])
+        
+        best_distance = float('inf')
+        best_symmetry = None
+        best_canonical = None
+        
+        for sym_rot in symmetry_rotations:
+            # Apply inverse symmetry to detected: detected * inv(sym_rot)
+            # This transforms detected back toward the canonical pose
+            sym_inv = QuaternionOrientationController.quaternion_inverse(sym_rot)
+            transformed = QuaternionOrientationController.quaternion_multiply(detected_quat, sym_inv)
+            transformed = transformed / np.linalg.norm(transformed)
+            
+            # Measure distance to identity (canonical reference)
+            distance = QuaternionOrientationController.quaternion_distance(transformed, identity)
+            
+            if distance < best_distance:
+                best_distance = distance
+                best_symmetry = sym_rot
+                best_canonical = transformed
+        
+        if best_distance <= threshold:
+            return best_canonical, best_symmetry, best_distance
+        else:
+            return None, None, best_distance
+    
+    @staticmethod
+    def normalize_to_canonical(detected_quat, object_name, symmetry_dir, threshold=0.15):
+        """
+        Normalize detected quaternion to canonical pose using fold symmetry.
+        
+        This function:
+        1. Loads symmetry data for the object
+        2. Finds the best canonical equivalent orientation
+        3. Returns a quaternion that represents the "canonical view"
+        
+        The canonical quaternion can then be used to extract a consistent yaw
+        for gripper alignment.
+        
+        Args:
+            detected_quat: Detected object quaternion [x, y, z, w]
+            object_name: Name of the object (e.g., "line_brown_scaled70")
+            symmetry_dir: Directory containing symmetry JSON files
+            threshold: Maximum quaternion distance for a match (0-1 scale, ~0.15 = ~30°)
+            
+        Returns:
+            Canonical quaternion [x, y, z, w] - either matched or original if no match
         """
         # Load fold symmetry data
         fold_data = QuaternionOrientationController.load_fold_symmetry_json(object_name, symmetry_dir)
         
         if fold_data is None:
             # No symmetry data available, return detected quaternion as-is
-            return np.array(detected_quat) / np.linalg.norm(detected_quat)
+            detected_quat = np.array(detected_quat)
+            return detected_quat / np.linalg.norm(detected_quat)
         
-        # Find canonical match
-        canonical_quat = QuaternionOrientationController.find_canonical_quaternion(
-            detected_quat, fold_data, threshold
-        )
+        # Find closest canonical
+        canonical_quat, symmetry_used, distance = \
+            QuaternionOrientationController.find_closest_canonical_quaternion(
+                detected_quat, fold_data, threshold
+            )
         
         if canonical_quat is not None:
-            # Match found, return canonical quaternion
             return canonical_quat
         else:
-            # No match, return detected quaternion (normalized)
-            return np.array(detected_quat) / np.linalg.norm(detected_quat)
+            # No close match found, return original (normalized)
+            detected_quat = np.array(detected_quat)
+            return detected_quat / np.linalg.norm(detected_quat)
+    
+    @staticmethod
+    def get_canonical_yaw_for_gripper(detected_quat, object_name, symmetry_dir):
+        """
+        Get the canonical yaw angle for gripper alignment.
+        
+        This combines fold symmetry normalization with yaw extraction
+        to give a consistent yaw angle regardless of which symmetric
+        view of the object was detected.
+        
+        Args:
+            detected_quat: Detected object quaternion [x, y, z, w]
+            object_name: Name of the object
+            symmetry_dir: Directory containing symmetry JSON files
+            
+        Returns:
+            Tuple of (canonical_yaw_degrees, canonical_quat, was_matched)
+        """
+        # Load fold symmetry data
+        fold_data = QuaternionOrientationController.load_fold_symmetry_json(object_name, symmetry_dir)
+        
+        detected_quat = np.array(detected_quat)
+        detected_quat = detected_quat / np.linalg.norm(detected_quat)
+        
+        if fold_data is None:
+            # No symmetry data, use detected yaw directly
+            yaw = QuaternionOrientationController.extract_yaw_from_quaternion(detected_quat)
+            return yaw, detected_quat, False
+        
+        # Method 1: Use yaw-based normalization (simpler, works for Z-symmetric objects)
+        canonical_yaw = QuaternionOrientationController.find_equivalent_canonical_yaw(
+            detected_quat, fold_data
+        )
+        
+        # Method 2: Use full quaternion matching (more robust for complex symmetries)
+        canonical_quat, symmetry_used, distance = \
+            QuaternionOrientationController.find_closest_canonical_quaternion(
+                detected_quat, fold_data, threshold=0.15
+            )
+        
+        was_matched = canonical_quat is not None
+        
+        if was_matched:
+            # Use yaw from the canonical quaternion
+            canonical_yaw = QuaternionOrientationController.extract_yaw_from_quaternion(canonical_quat)
+            return canonical_yaw, canonical_quat, True
+        else:
+            # Fall back to simple yaw normalization
+            return canonical_yaw, detected_quat, False
     
     @staticmethod
     def verify_quaternion_approach():
         """
         Verify quaternion approach works for full 360° rotation (no gimbal lock).
         
-        This test ensures that the quaternion-based approach is stable across
-        all yaw angles, with no numerical instability or singularities.
-        
         Returns:
             bool: True if all tests pass, False otherwise
-            
-        Example:
-            controller = QuaternionOrientationController()
-            if controller.verify_quaternion_approach():
-                print("✅ Safe to use quaternion approach!")
-            else:
-                print("❌ Quaternion verification failed!")
         """
         print("=" * 70)
         print("Testing quaternion face-down approach (full 360° rotation)...")
@@ -461,7 +653,6 @@ class QuaternionOrientationController:
                 
                 if not (mag_ok and finite_ok):
                     all_passed = False
-                    print(f"   ⚠️  Issues detected!")
                     
             except Exception as e:
                 print(f"❌ Yaw {yaw_deg:3d}°: Exception - {e}")
@@ -470,67 +661,89 @@ class QuaternionOrientationController:
         print("=" * 70)
         if all_passed:
             print("✅ SUCCESS: Quaternion approach is gimbal-lock-free!")
-            print("   All yaw angles (0-360°) work correctly with no gimbal lock.")
-            print("   Magnitudes are normalized to 1.0 (unit quaternions).")
-            print("   All values are numerically stable (no NaN/Inf).")
         else:
             print("❌ FAILURE: Quaternion verification detected issues!")
         print("=" * 70)
         
         return all_passed
+    
+    @staticmethod
+    def test_fold_symmetry(object_name, symmetry_dir):
+        """
+        Test fold symmetry matching for an object.
+        
+        Args:
+            object_name: Name of the object to test
+            symmetry_dir: Directory containing symmetry JSON files
+        """
+        print("=" * 70)
+        print(f"Testing fold symmetry for: {object_name}")
+        print("=" * 70)
+        
+        # Load symmetry data
+        fold_data = QuaternionOrientationController.load_fold_symmetry_json(object_name, symmetry_dir)
+        
+        if fold_data is None:
+            print(f"❌ No symmetry data found for {object_name}")
+            return
+        
+        print(f"✅ Loaded symmetry data:")
+        for axis, data in fold_data.get('fold_axes', {}).items():
+            print(f"   {axis.upper()}-axis: {data.get('fold', 1)}-fold symmetry")
+        
+        # Get symmetry rotations
+        symmetry_rots = QuaternionOrientationController.generate_full_symmetry_group(fold_data)
+        print(f"\n📊 Total symmetry group size: {len(symmetry_rots)}")
+        
+        # Test with various detected orientations
+        print(f"\n🧪 Testing canonical yaw extraction:")
+        test_yaws = [0, 45, 90, 135, 180, 225, 270, 315]
+        
+        for test_yaw in test_yaws:
+            # Create a test quaternion (object lying flat with given yaw)
+            test_quat = R.from_euler('xyz', [0, 0, test_yaw], degrees=True).as_quat()
+            
+            canonical_yaw, canonical_quat, was_matched = \
+                QuaternionOrientationController.get_canonical_yaw_for_gripper(
+                    test_quat, object_name, symmetry_dir
+                )
+            
+            match_str = "✅ matched" if was_matched else "⚠️ no match"
+            print(f"   Input yaw {test_yaw:3d}° → Canonical yaw {canonical_yaw:7.2f}° ({match_str})")
+        
+        print("=" * 70)
 
 
 # Convenience functions for backward compatibility
 def face_down_quaternion(yaw_degrees):
-    """Convenience function wrapper for QuaternionOrientationController.face_down_quaternion()"""
+    """Convenience function wrapper"""
     return QuaternionOrientationController.face_down_quaternion(yaw_degrees)
 
 
 def quaternion_to_rpy(q):
-    """Convenience function wrapper for QuaternionOrientationController.quaternion_to_rpy()"""
+    """Convenience function wrapper"""
     return QuaternionOrientationController.quaternion_to_rpy(q)
 
 
 def rpy_to_quaternion(roll_deg, pitch_deg, yaw_deg):
-    """Convenience function wrapper for QuaternionOrientationController.rpy_to_quaternion()"""
+    """Convenience function wrapper"""
     return QuaternionOrientationController.rpy_to_quaternion(roll_deg, pitch_deg, yaw_deg)
 
 
 if __name__ == "__main__":
+    import sys
+    
     # Run verification test
     controller = QuaternionOrientationController()
     success = controller.verify_quaternion_approach()
     
-    # Example usage
-    print("\n" + "=" * 70)
-    print("Example Usage:")
-    print("=" * 70)
-    
-    # Example 1: Create face-down quaternion with 45° yaw
-    q_45 = controller.face_down_quaternion(45.0)
-    print(f"\n1. Face-down gripper at yaw=45°:")
-    print(f"   Quaternion: [{q_45[0]:.6f}, {q_45[1]:.6f}, {q_45[2]:.6f}, {q_45[3]:.6f}]")
-    rpy_45 = controller.quaternion_to_rpy(q_45)
-    print(f"   Converted to RPY: {rpy_45}")
-    
-    # Example 2: Smooth interpolation
-    q_0 = controller.face_down_quaternion(0.0)
-    q_90 = controller.face_down_quaternion(90.0)
-    q_interp = controller.slerp(q_0, q_90, 0.5)
-    print(f"\n2. Smooth interpolation between yaw=0° and yaw=90° at t=0.5:")
-    print(f"   Interpolated quaternion: [{q_interp[0]:.6f}, {q_interp[1]:.6f}, "
-          f"{q_interp[2]:.6f}, {q_interp[3]:.6f}]")
-    rpy_interp = controller.quaternion_to_rpy(q_interp)
-    print(f"   Converted to RPY: {rpy_interp}")
-    
-    # Example 3: Apply additional yaw rotation
-    q_base = controller.face_down_quaternion(0.0)
-    q_rotated = controller.apply_yaw_rotation(q_base, 30.0)
-    print(f"\n3. Apply 30° additional yaw rotation to face-down (yaw=0°):")
-    print(f"   Result quaternion: [{q_rotated[0]:.6f}, {q_rotated[1]:.6f}, "
-          f"{q_rotated[2]:.6f}, {q_rotated[3]:.6f}]")
-    rpy_rotated = controller.quaternion_to_rpy(q_rotated)
-    print(f"   Converted to RPY: {rpy_rotated}")
-    
-    print("\n" + "=" * 70)
-
+    # Test fold symmetry if directory provided
+    if len(sys.argv) > 1:
+        symmetry_dir = sys.argv[1]
+        print("\n")
+        controller.test_fold_symmetry("line_brown_scaled70", symmetry_dir)
+        print("\n")
+        controller.test_fold_symmetry("fork_yellow_scaled70", symmetry_dir)
+    else:
+        print("\nTo test fold symmetry, run:")
+        print(f"  python {sys.argv[0]} /path/to/symmetry/dir")
