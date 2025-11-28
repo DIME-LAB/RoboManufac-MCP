@@ -557,15 +557,24 @@ class DirectObjectMove(Node):
         ])
         
         # Verify that at least one explicit mode is specified
+        # Object detection mode is valid if object_name is provided (even if latest_pose is None - we'll wait for it)
         has_explicit_mode = (
             (self.target_xyz is not None and self.target_xyzw is not None) or
             (self.grasp_id is not None) or
-            (self.latest_pose is not None)  # Object detection is also an explicit mode when object_name is provided
+            (self.object_name is not None and self.object_name != "")  # Object detection mode when object_name is provided
         )
         
         if not has_explicit_mode:
             self.get_logger().error("❌ No explicit mode specified. Must provide one of: target_xyz/xyzw, grasp_id, or object detection. Exiting.")
             self.should_exit = True
+            return
+        
+        # If in object detection mode but no pose received yet, wait
+        if (self.object_name is not None and self.object_name != "" and 
+            self.target_xyz is None and self.grasp_id is None and 
+            self.latest_pose is None and 
+            (self.mode != 'real' or self.last_known_object_position is None)):
+            self.get_logger().debug("Waiting for object pose to be received...")
             return
         
         # Check if we have optional target position/orientation
@@ -600,16 +609,19 @@ class DirectObjectMove(Node):
                 provided_quat / np.linalg.norm(provided_quat)
             )
             
-            # Always extract yaw from PROVIDED quaternion (not canonical)
-            # The canonical match tells us the provided pose is equivalent to canonical pose due to fold symmetry,
-            # but the provided quaternion has the actual orientation in world frame
-            object_yaw = self.quat_controller.extract_yaw_from_quaternion(provided_quat)
-            target_quaternion = self.quat_controller.face_down_quaternion(object_yaw)
+            # Extract yaw from canonical quaternion if match found, otherwise from provided quaternion
+            # When canonical match is found, the canonical quaternion is the normalized equivalent
+            # of the provided orientation, so we extract yaw from it for consistency
+            if canonical_match:
+                object_yaw = self.quat_controller.extract_yaw_from_quaternion(canonical_quat)
+                match_status = "✅ Canonical match"
+                yaw_source = "canonical quaternion (fold symmetry normalized)"
+            else:
+                object_yaw = self.quat_controller.extract_yaw_from_quaternion(provided_quat)
+                match_status = "⚠️ No canonical match (using provided)"
+                yaw_source = "provided quaternion"
             
-            # Log fold symmetry matching result
-            match_status = "✅ Canonical match" if canonical_match else "⚠️ No canonical match (using provided)"
-            # Always extract from provided quaternion, not canonical
-            yaw_source = "provided quaternion"
+            target_quaternion = self.quat_controller.face_down_quaternion(object_yaw)
             
             self.get_logger().info(f"🎯 Using provided target position: {object_position}")
             self.get_logger().info(f"🎯 Provided quaternion: q=[{provided_quat[0]:.6f}, {provided_quat[1]:.6f}, "
@@ -703,18 +715,20 @@ class DirectObjectMove(Node):
                     grasp_point_quat / np.linalg.norm(grasp_point_quat)
                 )
                 
-                # Always extract yaw from DETECTED grasp point quaternion (not canonical)
-                # The canonical match tells us the grasp point is equivalent to canonical pose due to fold symmetry,
-                # but the detected quaternion has the actual grasp point orientation in world frame
-                grasp_point_yaw = self.quat_controller.extract_yaw_from_quaternion(grasp_point_quat)
+                # Extract yaw from canonical quaternion if match found, otherwise from detected quaternion
+                # When canonical match is found, the canonical quaternion is the normalized equivalent
+                # of the detected orientation, so we extract yaw from it for consistency
+                if canonical_match:
+                    grasp_point_yaw = self.quat_controller.extract_yaw_from_quaternion(canonical_quat)
+                    match_status = "✅ Canonical match"
+                    yaw_source = "canonical quaternion (fold symmetry normalized)"
+                else:
+                    grasp_point_yaw = self.quat_controller.extract_yaw_from_quaternion(grasp_point_quat)
+                    match_status = "⚠️ No canonical match (using grasp point)"
+                    yaw_source = "detected quaternion"
                 
                 # Create face-down quaternion with grasp point yaw (QUATERNION-BASED, no gimbal lock)
                 target_quaternion = self.quat_controller.face_down_quaternion(grasp_point_yaw)
-                
-                # Log fold symmetry matching result
-                match_status = "✅ Canonical match" if canonical_match else "⚠️ No canonical match (using grasp point)"
-                # Always extract from detected grasp point quaternion, not canonical
-                yaw_source = "detected quaternion"
                 
                 self.get_logger().info(f"🎯 Using grasp point {self.grasp_id} position: {grasp_point_position}")
                 self.get_logger().info(f"🎯 Grasp point quaternion (detected): q=[{grasp_point_quat[0]:.6f}, {grasp_point_quat[1]:.6f}, "
@@ -788,12 +802,15 @@ class DirectObjectMove(Node):
                 detected_object_quat / np.linalg.norm(detected_object_quat)
             )
             
-            # Always extract yaw from DETECTED quaternion (not canonical)
-            # The canonical match tells us the object is equivalent to canonical pose due to fold symmetry,
-            # but the detected quaternion has the actual object orientation in world frame
-            # The canonical quaternion represents a fold-symmetry rotation (e.g., 180° around Y-axis),
-            # so its yaw component doesn't represent the object's actual yaw
-            object_yaw = self.quat_controller.extract_yaw_from_quaternion(detected_object_quat)
+            # Extract yaw from canonical quaternion if match found, otherwise from detected quaternion
+            # When canonical match is found, the canonical quaternion is the normalized equivalent
+            # of the detected orientation, so we extract yaw from it for consistency
+            if canonical_match:
+                object_yaw = self.quat_controller.extract_yaw_from_quaternion(canonical_quat)
+                yaw_source = "canonical quaternion (fold symmetry normalized)"
+            else:
+                object_yaw = self.quat_controller.extract_yaw_from_quaternion(detected_object_quat)
+                yaw_source = "detected quaternion"
             
             # Apply calibration offset to correct systematic detection bias (only for real mode)
             if self.mode == 'real':
@@ -842,8 +859,6 @@ class DirectObjectMove(Node):
             
             # Log fold symmetry matching result
             match_status = "✅ Canonical match" if canonical_match else "⚠️ No canonical match (using detected)"
-            # Always extract from detected quaternion, not canonical
-            yaw_source = "detected quaternion"
             
             self.get_logger().info(f"🎯 Detected object at ({object_position[0]:.3f}, {object_position[1]:.3f}, {object_position[2]:.3f})")
             self.get_logger().info(f"🎯 Object quaternion (detected): q=[{detected_object_quat[0]:.6f}, {detected_object_quat[1]:.6f}, "
@@ -898,7 +913,12 @@ class DirectObjectMove(Node):
                         self.should_exit = True
                         return
             else:
-                # No explicit mode specified and no object detected: exit
+                # No target provided and no object detected
+                # If in object detection mode (object_name provided), wait for pose
+                if self.object_name is not None and self.object_name != "":
+                    self.get_logger().debug("Waiting for object pose to be received...")
+                    return
+                # Otherwise, no explicit mode specified: exit
                 self.get_logger().error("❌ No explicit mode specified (no target_xyz/xyzw, no grasp_id) and no object detected. Cannot proceed. Exiting.")
                 self.should_exit = True
                 return
