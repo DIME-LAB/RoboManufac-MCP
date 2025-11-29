@@ -4,12 +4,13 @@ Grasp Points Publisher
 Reads object poses from topic and publishes grasp points to topic.
 Uses grasp points data from JSON files and transforms them using object poses.
 
-Supports two modes:
+Supports three modes:
 - sim: Uses /objects_poses_sim and /grasp_points_sim topics
 - real: Uses /objects_poses_real and /grasp_points_real topics
+- default/auto: Publishes to both sim and real topics
 
 Usage:
-    python3 grasp_points_publisher.py [--mode sim|real]
+    python3 grasp_points_publisher.py [--mode sim|real|default]
 """
 
 import sys
@@ -53,27 +54,10 @@ class GraspPointsPublisher(Node):
     def __init__(self, objects_poses_topic=None, 
                  grasp_points_topic=None,
                  data_dir=None,
-                 mode='sim'):
+                 mode='default'):
         super().__init__('grasp_points_publisher')
         
-        self.mode = mode  # 'sim' or 'real'
-        
-        # Set default topics based on mode if not provided
-        if objects_poses_topic is None:
-            if self.mode == 'sim':
-                self.objects_poses_topic = "/objects_poses_sim"
-            else:
-                self.objects_poses_topic = "/objects_poses_real"
-        else:
-            self.objects_poses_topic = objects_poses_topic
-        
-        if grasp_points_topic is None:
-            if self.mode == 'sim':
-                self.grasp_points_topic = "/grasp_points_sim"
-            else:
-                self.grasp_points_topic = "/grasp_points_real"
-        else:
-            self.grasp_points_topic = grasp_points_topic
+        self.mode = mode  # 'sim', 'real', or 'default'
         
         # Set up data directory
         if data_dir is None:
@@ -89,39 +73,99 @@ class GraspPointsPublisher(Node):
         self.object_name_map: Dict[str, str] = {}
         self.load_grasp_data()
         
-        # Store latest object poses
+        # Store latest object poses - separate for sim and real in default mode
         self.object_poses: Dict[str, dict] = {}
+        self.object_poses_sim: Dict[str, dict] = {}
+        self.object_poses_real: Dict[str, dict] = {}
         
-        # Create subscription to object poses
+        # QoS profile for subscriptions and publishers
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
             depth=10
         )
-        self.pose_sub = self.create_subscription(
-            TFMessage,
-            self.objects_poses_topic,
-            self.objects_poses_callback,
-            qos_profile
-        )
         
-        # Create publisher for grasp points
-        self.grasp_pub = self.create_publisher(
-            GraspPointArray,
-            self.grasp_points_topic,
-            qos_profile
-        )
+        # Handle different modes
+        if self.mode == 'default' or self.mode == 'auto':
+            # Default mode: subscribe to both sim and real, publish to both
+            self.objects_poses_topic_sim = "/objects_poses_sim"
+            self.objects_poses_topic_real = "/objects_poses_real"
+            self.grasp_points_topic_sim = "/grasp_points_sim"
+            self.grasp_points_topic_real = "/grasp_points_real"
+            
+            # Create subscriptions for both sim and real
+            self.pose_sub_sim = self.create_subscription(
+                TFMessage,
+                self.objects_poses_topic_sim,
+                lambda msg: self.objects_poses_callback(msg, 'sim'),
+                qos_profile
+            )
+            self.pose_sub_real = self.create_subscription(
+                TFMessage,
+                self.objects_poses_topic_real,
+                lambda msg: self.objects_poses_callback(msg, 'real'),
+                qos_profile
+            )
+            
+            # Create publishers for both sim and real
+            self.grasp_pub_sim = self.create_publisher(
+                GraspPointArray,
+                self.grasp_points_topic_sim,
+                qos_profile
+            )
+            self.grasp_pub_real = self.create_publisher(
+                GraspPointArray,
+                self.grasp_points_topic_real,
+                qos_profile
+            )
+            
+            self.get_logger().info(f"Grasp Points Publisher started (DEFAULT/AUTO mode)")
+            self.get_logger().info(f"Subscribing to: {self.objects_poses_topic_sim} and {self.objects_poses_topic_real}")
+            self.get_logger().info(f"Publishing to: {self.grasp_points_topic_sim} and {self.grasp_points_topic_real}")
+        else:
+            # Single mode: sim or real
+            if objects_poses_topic is None:
+                if self.mode == 'sim':
+                    self.objects_poses_topic = "/objects_poses_sim"
+                else:
+                    self.objects_poses_topic = "/objects_poses_real"
+            else:
+                self.objects_poses_topic = objects_poses_topic
+            
+            if grasp_points_topic is None:
+                if self.mode == 'sim':
+                    self.grasp_points_topic = "/grasp_points_sim"
+                else:
+                    self.grasp_points_topic = "/grasp_points_real"
+            else:
+                self.grasp_points_topic = grasp_points_topic
+            
+            # Create single subscription
+            self.pose_sub = self.create_subscription(
+                TFMessage,
+                self.objects_poses_topic,
+                self.objects_poses_callback,
+                qos_profile
+            )
+            
+            # Create single publisher
+            self.grasp_pub = self.create_publisher(
+                GraspPointArray,
+                self.grasp_points_topic,
+                qos_profile
+            )
+            
+            self.get_logger().info(f"Grasp Points Publisher started")
+            self.get_logger().info(f"Subscribing to: {self.objects_poses_topic}")
+            self.get_logger().info(f"Publishing to: {self.grasp_points_topic}")
+            self.get_logger().info(f"Mode: {self.mode.upper()}")
         
         # Timer to publish grasp points periodically
         # Lower frequency to reduce race conditions
         self.publish_timer = self.create_timer(0.2, self.publish_grasp_points)  # 5 Hz
         
-        self.get_logger().info(f"🤖 Grasp Points Publisher started")
-        self.get_logger().info(f"📥 Subscribing to: {self.objects_poses_topic}")
-        self.get_logger().info(f"📤 Publishing to: {self.grasp_points_topic}")
-        self.get_logger().info(f"🔧 Mode: {self.mode.upper()}")
-        self.get_logger().info(f"📁 Data directory: {self.data_dir}")
-        self.get_logger().info(f"📦 Loaded grasp data for {len(self.grasp_data)} objects")
+        self.get_logger().info(f"Data directory: {self.data_dir}")
+        self.get_logger().info(f"Loaded grasp data for {len(self.grasp_data)} objects")
     
     def load_grasp_data(self):
         """Load all grasp points JSON files from data directory"""
@@ -147,15 +191,34 @@ class GraspPointsPublisher(Node):
                         # Also allow direct match
                         self.object_name_map[object_name_json] = object_name_json
                         
-                        self.get_logger().info(f"  ✓ Loaded: {object_name_json} ({data.get('total_grasp_points', 0)} grasp points)")
+                        self.get_logger().info(f"  Loaded: {object_name_json} ({data.get('total_grasp_points', 0)} grasp points)")
                         self.get_logger().debug(f"    Mapped topic name '{topic_name}' -> JSON name '{object_name_json}'")
             except Exception as e:
                 self.get_logger().error(f"Error loading {grasp_file}: {e}")
     
-    def objects_poses_callback(self, msg: TFMessage):
-        """Handle incoming object poses from TFMessage - update stored poses"""
-        # Clear all existing poses first
-        self.object_poses.clear()
+    def objects_poses_callback(self, msg: TFMessage, source_mode=None):
+        """Handle incoming object poses from TFMessage - update stored poses
+        
+        Args:
+            msg: TFMessage containing object poses
+            source_mode: 'sim' or 'real' (only used in default mode)
+        """
+        # Determine which pose storage to use
+        if self.mode == 'default' or self.mode == 'auto':
+            # In default mode, store poses separately for sim and real
+            if source_mode == 'sim':
+                target_poses = self.object_poses_sim
+            elif source_mode == 'real':
+                target_poses = self.object_poses_real
+            else:
+                # Fallback (shouldn't happen)
+                target_poses = self.object_poses
+        else:
+            # Single mode: use main storage
+            target_poses = self.object_poses
+        
+        # Clear all existing poses for this source first
+        target_poses.clear()
         
         # If message is empty, we're done (poses already cleared)
         if not msg.transforms:
@@ -167,7 +230,7 @@ class GraspPointsPublisher(Node):
             trans = transform.transform.translation
             rot = transform.transform.rotation
             
-            self.object_poses[object_name] = {
+            target_poses[object_name] = {
                 'translation': np.array([trans.x, trans.y, trans.z]),
                 'quaternion': np.array([rot.x, rot.y, rot.z, rot.w]),
                 'header': transform.header
@@ -235,21 +298,19 @@ class GraspPointsPublisher(Node):
 
         return pos_base, quat_base
 
-    def publish_grasp_points(self):
-        """Publish grasp points for all objects with known poses"""
-        # Create message (always publish, even if empty, to clear topic when no poses)
+    def _create_grasp_array_from_poses(self, object_poses_dict):
+        """Create a GraspPointArray message from a dictionary of object poses"""
         grasp_array = GraspPointArray()
         now = self.get_clock().now()
         grasp_array.header.stamp = now.to_msg()
         grasp_array.header.frame_id = "base"
         
-        # If no object poses, publish empty array to clear topic
-        if not self.object_poses or not self.grasp_data:
-            self.grasp_pub.publish(grasp_array)
-            return
+        # If no object poses or no grasp data, return empty array
+        if not object_poses_dict or not self.grasp_data:
+            return grasp_array
         
         # Process each object with a pose
-        for object_name_topic, object_pose in self.object_poses.items():
+        for object_name_topic, object_pose in object_poses_dict.items():
             # Find matching grasp data
             object_name_json = self.object_name_map.get(object_name_topic, object_name_topic)
             if object_name_json not in self.grasp_data:
@@ -284,8 +345,23 @@ class GraspPointsPublisher(Node):
                 except Exception as e:
                     self.get_logger().error(f"Error transforming grasp point {gp_local.get('id')} for {object_name_topic}: {e}")
         
-        # Always publish (even if empty array)
-        self.grasp_pub.publish(grasp_array)
+        return grasp_array
+    
+    def publish_grasp_points(self):
+        """Publish grasp points for all objects with known poses"""
+        if self.mode == 'default' or self.mode == 'auto':
+            # Default mode: publish to both sim and real topics
+            grasp_array_sim = self._create_grasp_array_from_poses(self.object_poses_sim)
+            grasp_array_real = self._create_grasp_array_from_poses(self.object_poses_real)
+            
+            # Always publish to both (even if empty arrays)
+            self.grasp_pub_sim.publish(grasp_array_sim)
+            self.grasp_pub_real.publish(grasp_array_real)
+        else:
+            # Single mode: publish to single topic
+            grasp_array = self._create_grasp_array_from_poses(self.object_poses)
+            # Always publish (even if empty array)
+            self.grasp_pub.publish(grasp_array)
 
 
 def main(args=None):
@@ -297,8 +373,8 @@ def main(args=None):
                        help='Topic name for object poses subscription (default: based on mode)')
     parser.add_argument('--grasp-points-topic', type=str, default=None,
                        help='Topic name for grasp points publication (default: based on mode)')
-    parser.add_argument('--mode', type=str, default='sim', choices=['sim', 'real'],
-                       help='Mode: "sim" for simulation (uses /objects_poses_sim, /grasp_points_sim), "real" for real robot (uses /objects_poses_real, /grasp_points_real). Default: sim')
+    parser.add_argument('--mode', type=str, default='default', choices=['sim', 'real', 'default', 'auto'],
+                       help='Mode: "sim" for simulation only, "real" for real robot only, "default"/"auto" to automatically publish to both based on topic availability. Default: default')
     parser.add_argument('--data-dir', type=str, default=None,
                        help='Directory containing grasp points JSON files (default: data/grasp relative to project root)')
     
