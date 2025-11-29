@@ -10,9 +10,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 import numpy as np
 import sys
 import os
-import re
-import json
-import yaml
+import argparse
 
 # Add custom libraries to Python path
 custom_lib_path = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries"
@@ -20,14 +18,15 @@ if custom_lib_path not in sys.path:
     sys.path.append(custom_lib_path)
 
 try:
-    from ik_solver import compute_ik, compute_ik_robust
+    from ik_solver import ik_objective_quaternion, forward_kinematics, dh_params
 except ImportError as e:
     print(f"Failed to import IK solver: {e}")
     sys.exit(1)
 
-class MoveToSafeHeight(Node):
-    def __init__(self):
-        super().__init__('move_to_safe_height')
+class MoveToClearSpace(Node):
+    def __init__(self, mode='move'):
+        super().__init__('move_to_clear_space')
+        self.mode = mode  # 'move' or 'hover'
         self.joint_names = [
             "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
             "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"
@@ -40,8 +39,10 @@ class MoveToSafeHeight(Node):
             '/scaled_joint_trajectory_controller/follow_joint_trajectory'
         )
         
-        # Safe height target
-        self.safe_height = 0.3
+        # Target position for clear space (gripper center position, not TCP)
+        self.target_gripper_center_position = [-0.320, -0.5, 0.3]  # [x, y, z] - gripper center position
+        # TCP to gripper center offset (24cm along gripper Z-axis, from TCP to gripper center)
+        self.tcp_to_gripper_center_offset = 0.24  # 0.24m = 24cm
         
         # EE pose data storage
         self.ee_pose_received = False
@@ -52,7 +53,7 @@ class MoveToSafeHeight(Node):
         self.current_joint_angles = None
         self.joint_angles_received = False
         
-        # Subscriber for EE pose data (using same QoS as get_ee_pose.py)
+        # Subscriber for EE pose data (using same QoS as move_to_safe_height)
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -78,7 +79,7 @@ class MoveToSafeHeight(Node):
         self.action_client.wait_for_server()
         
         # Execute movement
-        self.move_to_safe_height()
+        self.move_to_clear_space()
     
     def ee_pose_callback(self, msg: PoseStamped):
         """Callback for end-effector pose data"""
@@ -185,9 +186,9 @@ class MoveToSafeHeight(Node):
             'orientation': orientation
         }
 
-    def move_to_safe_height(self):
-        """Move to safe height while maintaining current position and orientation"""
-        # Read current end-effector pose using MCP read_topic
+    def move_to_clear_space(self):
+        """Move to clear space position while maintaining current end-effector orientation"""
+        # Read current end-effector pose
         self.get_logger().info("Reading current end-effector pose...")
         pose_data = self.read_current_ee_pose()
         
@@ -202,12 +203,6 @@ class MoveToSafeHeight(Node):
         # Convert quaternion directly to rotation matrix to avoid precision loss from RPY conversion
         from scipy.spatial.transform import Rotation as Rot
         from scipy.optimize import minimize
-        from ik_solver import ik_objective_quaternion, forward_kinematics, dh_params
-        
-        # Keep the current orientation (don't change it, just move to safe height)
-        # Convert quaternion directly to rotation matrix for more accurate IK
-        target_rotation = Rot.from_quat(current_quat)
-        target_rot_matrix = target_rotation.as_matrix()
         
         # Also compute RPY for logging purposes
         current_rpy = self.quaternion_to_rpy(
@@ -215,30 +210,58 @@ class MoveToSafeHeight(Node):
             current_quat[2], current_quat[3]
         )
         
-        self.get_logger().info(f"Current EE position: {current_pos}")
+        self.get_logger().info(f"Current EE position (TCP): {current_pos}")
         self.get_logger().info(f"Current EE quaternion: {current_quat}")
         self.get_logger().info(f"Current EE RPY (deg): {current_rpy}")
-        self.get_logger().info(f"Target orientation: keeping current quaternion (no RPY conversion)")
-
-        # Create target position with safe height (same x,y but z=0.481)
-        target_position = current_pos.copy()
-        target_position[2] = self.safe_height  # Set z to safe height
+        self.get_logger().info(f"Target gripper center position: {self.target_gripper_center_position}")
+        self.get_logger().info(f"Mode: {self.mode}")
         
-        self.get_logger().info(f"Target position: {target_position}")
-
+        # Determine target orientation based on mode
+        if self.mode == 'hover':
+            # Hover mode: Change to top-down (face-down) orientation
+            # Standard top-down: roll=0°, pitch=180°, yaw=0°
+            target_rotation = Rot.from_euler('xyz', [0, 180, 0], degrees=True)
+            target_quat = target_rotation.as_quat()
+            target_rot_matrix = target_rotation.as_matrix()
+            
+            self.get_logger().info(f"Hover mode: Setting orientation to face-down (top-down) - roll=0°, pitch=180°, yaw=0°")
+        else:
+            # Move mode: Keep the current orientation (don't change it, just move to target position)
+            target_rotation = Rot.from_quat(current_quat)
+            target_quat = current_quat
+            target_rot_matrix = target_rotation.as_matrix()
+            
+            self.get_logger().info(f"Move mode: Keeping current orientation")
+        
+        # Calculate TCP position from gripper center position
+        # The gripper Z-axis points from TCP to gripper center
+        # Apply offset only to X and Y, keep Z constant
+        gripper_z_axis = target_rot_matrix[:, 2]  # Z-axis of gripper frame in world frame
+        offset_vector = -self.tcp_to_gripper_center_offset * gripper_z_axis
+        tcp_position = np.array(self.target_gripper_center_position) + offset_vector
+        tcp_position[2] = self.target_gripper_center_position[2]  # Keep Z constant
+        
+        self.get_logger().info(f"Calculated TCP position: {tcp_position}")
+        self.get_logger().info(f"TCP to gripper center offset: {self.tcp_to_gripper_center_offset*100:.1f}cm along gripper Z-axis")
+        
+        if self.mode == 'hover':
+            target_rpy = target_rotation.as_euler('xyz', degrees=True)
+            self.get_logger().info(f"Target orientation: face-down (RPY: [{target_rpy[0]:.1f}, {target_rpy[1]:.1f}, {target_rpy[2]:.1f}]°)")
+        else:
+            self.get_logger().info(f"Target orientation: keeping current quaternion (no RPY conversion)")
+        
         # Compute inverse kinematics for target pose
         # Use quaternion directly converted to rotation matrix for more accurate orientation preservation
         try:
             # Create target pose with quaternion-derived rotation matrix
             target_pose = np.eye(4)
-            target_pose[:3, 3] = target_position
+            target_pose[:3, 3] = tcp_position
             target_pose[:3, :3] = target_rot_matrix
             
-            self.get_logger().info(f"Computing IK for position: {target_position}")
+            self.get_logger().info(f"Computing IK for TCP position: {tcp_position}")
             self.get_logger().info(f"Using quaternion-derived rotation matrix directly (NO RPY conversion)")
             
             # Use quaternion-based IK directly - no RPY conversion at all!
-            # Since we're only moving up to safe height, current joint angles should be very close to the solution
             joint_angles = None
             best_result = None
             best_cost = float('inf')
@@ -246,7 +269,6 @@ class MoveToSafeHeight(Node):
             dx = 0.001
             
             # Primary seed: use current joint angles from joint state subscription
-            # This is the best seed since we're only moving up (small Z change)
             if self.current_joint_angles is None:
                 self.get_logger().error("Current joint angles not available! Cannot compute IK.")
                 rclpy.shutdown()
@@ -262,7 +284,7 @@ class MoveToSafeHeight(Node):
                     break
                     
                 # Try small x-shift each iteration (helps with workspace boundaries)
-                perturbed_position = np.array(target_position).copy()
+                perturbed_position = np.array(tcp_position).copy()
                 perturbed_position[0] += i * dx
                 
                 perturbed_pose = target_pose.copy()
@@ -305,7 +327,7 @@ class MoveToSafeHeight(Node):
                 self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
             
             if joint_angles is None:
-                self.get_logger().error("IK failed: couldn't compute safe height position")
+                self.get_logger().error("IK failed: couldn't compute clear space position")
                 rclpy.shutdown()
                 return
                 
@@ -327,7 +349,7 @@ class MoveToSafeHeight(Node):
             goal.trajectory = traj
             goal.goal_time_tolerance = Duration(sec=1)
             
-            self.get_logger().info("Sending trajectory to safe height...")
+            self.get_logger().info("Sending trajectory to clear space position...")
             self._send_goal_future = self.action_client.send_goal_async(goal)
             self._send_goal_future.add_done_callback(self.goal_response)
             
@@ -343,7 +365,7 @@ class MoveToSafeHeight(Node):
             rclpy.shutdown()
             return
 
-        self.get_logger().info("Safe height trajectory accepted")
+        self.get_logger().info("Clear space trajectory accepted")
         self._get_result_future = goal_handle.get_result_async()
         self._get_result_future.add_done_callback(self.goal_result)
 
@@ -351,15 +373,30 @@ class MoveToSafeHeight(Node):
         """Handle goal result"""
         result = future.result()
         if result.status == 4:  # SUCCEEDED
-            self.get_logger().info("Successfully moved to safe height")
+            self.get_logger().info("Successfully moved to clear space position")
         else:
             self.get_logger().error(f"Trajectory failed with status: {result.status}")
         rclpy.shutdown()
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = MoveToSafeHeight()
+    parser = argparse.ArgumentParser(description='Move to clear space position')
+    parser.add_argument('--move', action='store_true', 
+                       help='Move to target position keeping current EE orientation (default)')
+    parser.add_argument('--hover', action='store_true',
+                       help='Move to target position with top-down (face-down) EE orientation')
+    
+    args = parser.parse_args()
+    
+    # Determine mode
+    if args.hover:
+        mode = 'hover'
+    else:
+        mode = 'move'  # Default mode
+    
+    rclpy.init()
+    node = MoveToClearSpace(mode=mode)
     rclpy.spin(node)
 
 if __name__ == '__main__':
     main()
+

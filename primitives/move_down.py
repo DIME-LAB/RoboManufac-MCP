@@ -52,10 +52,18 @@ except ImportError:
 # CONFIGURABLE PARAMETERS
 # =============================================================================
 GRIPPER_FORCE_THRESHOLD = 100.0  # Stop when gripper force exceeds this value (for sim mode)
-FORCE_THRESHOLD = -20.0  # Stop when any axis force exceeds (is less than) -10N (for real mode)
-MOVEMENT_DURATION = 30.0  # Duration for smooth movement in seconds
+
+# Real mode force thresholds:
+# Use DELTA-based detection for ALL axes to avoid false positives from baseline offsets
+# Contact is detected when force CHANGES significantly from baseline, not absolute values
+FORCE_THRESHOLD_X_DELTA = 15.0  # Stop when X force changes by this amount from baseline
+FORCE_THRESHOLD_Y_DELTA = 15.0  # Stop when Y force changes by this amount from baseline
+FORCE_THRESHOLD_Z_DELTA = 20.0  # Stop when Z force changes by this amount from baseline
+
+MOVEMENT_DURATION = 10.0  # Duration for smooth movement in seconds
 FORCE_CHECK_INTERVAL = 0.02  # Check force every 20ms during movement
-MOVE_DOWN_INCREMENT = 0.4  # Distance to move down per increment in meters
+MOVE_DOWN_INCREMENT = 0.6  # Distance to move down per increment in meters
+MIN_WORKSPACE_Z = 0.0  # Minimum Z position (workspace limit, below base is unreachable)
 # =============================================================================
 
 class MoveDown(Node):
@@ -88,6 +96,10 @@ class MoveDown(Node):
             self.current_force_x = 0.0
             self.current_force_y = 0.0
             self.current_force_z = 0.0
+            # Track baseline forces for ALL axes (captured at start of movement)
+            self.baseline_force_x = None
+            self.baseline_force_y = None
+            self.baseline_force_z = None
         self.force_threshold_reached = False
         
         # Current goal handle for cancellation
@@ -276,35 +288,51 @@ class MoveDown(Node):
             self.emergency_stop()
     
     def force_callback(self, msg: WrenchStamped):
-        """Callback for force/torque sensor data - monitors all three axes (real mode)"""
+        """Callback for force/torque sensor data - monitors all three axes (real mode)
+        
+        Uses DELTA-based detection: compares current force to baseline captured at movement start.
+        This avoids false positives from sensor offsets or gravity compensation.
+        """
         # Extract force components for all three axes
         self.current_force_x = msg.wrench.force.x
         self.current_force_y = msg.wrench.force.y
         self.current_force_z = msg.wrench.force.z
         
-        # Check if any axis force exceeds threshold (is less than -10N)
-        if not self.force_threshold_reached:
-            if self.current_force_x <= FORCE_THRESHOLD:
-                self.get_logger().warn(f"Force threshold reached on X axis! Force: {self.current_force_x:.2f}N (threshold: {FORCE_THRESHOLD}N)")
-                self.force_threshold_reached = True
-                self.emergency_stop()
-            elif self.current_force_y <= FORCE_THRESHOLD:
-                self.get_logger().warn(f"Force threshold reached on Y axis! Force: {self.current_force_y:.2f}N (threshold: {FORCE_THRESHOLD}N)")
-                self.force_threshold_reached = True
-                self.emergency_stop()
-            elif self.current_force_z <= FORCE_THRESHOLD:
-                self.get_logger().warn(f"Force threshold reached on Z axis! Force: {self.current_force_z:.2f}N (threshold: {FORCE_THRESHOLD}N)")
-                self.force_threshold_reached = True
-                self.emergency_stop()
+        # Capture baseline forces at start (before movement begins)
+        if not self.moving and self.baseline_force_x is None:
+            self.baseline_force_x = self.current_force_x
+            self.baseline_force_y = self.current_force_y
+            self.baseline_force_z = self.current_force_z
+            self.get_logger().info(
+                f"Captured baseline forces: X={self.baseline_force_x:.2f}N, "
+                f"Y={self.baseline_force_y:.2f}N, Z={self.baseline_force_z:.2f}N"
+            )
 
     def start_force_monitoring(self):
         """Start monitoring force during trajectory execution"""
+        # Capture current forces as baseline before starting movement
+        if self.mode == 'real':
+            if self.baseline_force_x is None:
+                self.baseline_force_x = self.current_force_x
+            if self.baseline_force_y is None:
+                self.baseline_force_y = self.current_force_y
+            if self.baseline_force_z is None:
+                self.baseline_force_z = self.current_force_z
+            self.get_logger().info(
+                f"Baseline forces at movement start: X={self.baseline_force_x:.2f}N, "
+                f"Y={self.baseline_force_y:.2f}N, Z={self.baseline_force_z:.2f}N"
+            )
+        
         if self.force_monitor_timer is None:
             self.force_monitor_timer = self.create_timer(FORCE_CHECK_INTERVAL, self.check_force_during_execution)
             if self.mode == 'sim':
                 self.get_logger().info("Started gripper force monitoring during execution")
             else:
-                self.get_logger().info("Started force monitoring during execution (all axes)")
+                self.get_logger().info(f"Started force monitoring during execution (delta-based)")
+                self.get_logger().info(
+                    f"  Thresholds: |ΔX| > {FORCE_THRESHOLD_X_DELTA}N, "
+                    f"|ΔY| > {FORCE_THRESHOLD_Y_DELTA}N, |ΔZ| > {FORCE_THRESHOLD_Z_DELTA}N"
+                )
 
     def stop_force_monitoring(self):
         """Stop force monitoring"""
@@ -342,22 +370,49 @@ class MoveDown(Node):
                 # Debug: log force values during movement
                 self.get_logger().debug(f"Force monitoring: Gripper force = {self.current_gripper_force:.2f} (threshold: {GRIPPER_FORCE_THRESHOLD})")
         else:
-            # Real mode: check all three axes
-            if self.current_force_x <= FORCE_THRESHOLD:
-                self.get_logger().error(f"EMERGENCY STOP: Force threshold exceeded on X axis during movement! Force: {self.current_force_x:.2f}N")
+            # Real mode: check forces using DELTA-based detection for ALL axes
+            # This compares current force to baseline captured at movement start
+            # Contact is detected when force CHANGES significantly, not based on absolute value
+            
+            # Calculate deltas from baseline
+            baseline_x = self.baseline_force_x if self.baseline_force_x is not None else 0.0
+            baseline_y = self.baseline_force_y if self.baseline_force_y is not None else 0.0
+            baseline_z = self.baseline_force_z if self.baseline_force_z is not None else 0.0
+            
+            force_x_delta = abs(self.current_force_x - baseline_x)
+            force_y_delta = abs(self.current_force_y - baseline_y)
+            force_z_delta = abs(self.current_force_z - baseline_z)
+            
+            if force_x_delta >= FORCE_THRESHOLD_X_DELTA:
+                self.get_logger().error(
+                    f"EMERGENCY STOP: X force delta exceeded threshold! "
+                    f"ΔX={force_x_delta:.2f}N (current: {self.current_force_x:.2f}N, "
+                    f"baseline: {baseline_x:.2f}N, threshold: {FORCE_THRESHOLD_X_DELTA}N)"
+                )
                 self.force_threshold_reached = True
                 self.emergency_stop()
-            elif self.current_force_y <= FORCE_THRESHOLD:
-                self.get_logger().error(f"EMERGENCY STOP: Force threshold exceeded on Y axis during movement! Force: {self.current_force_y:.2f}N")
+            elif force_y_delta >= FORCE_THRESHOLD_Y_DELTA:
+                self.get_logger().error(
+                    f"EMERGENCY STOP: Y force delta exceeded threshold! "
+                    f"ΔY={force_y_delta:.2f}N (current: {self.current_force_y:.2f}N, "
+                    f"baseline: {baseline_y:.2f}N, threshold: {FORCE_THRESHOLD_Y_DELTA}N)"
+                )
                 self.force_threshold_reached = True
                 self.emergency_stop()
-            elif self.current_force_z <= FORCE_THRESHOLD:
-                self.get_logger().error(f"EMERGENCY STOP: Force threshold exceeded on Z axis during movement! Force: {self.current_force_z:.2f}N")
+            elif force_z_delta >= FORCE_THRESHOLD_Z_DELTA:
+                self.get_logger().error(
+                    f"EMERGENCY STOP: Z force delta exceeded threshold! "
+                    f"ΔZ={force_z_delta:.2f}N (current: {self.current_force_z:.2f}N, "
+                    f"baseline: {baseline_z:.2f}N, threshold: {FORCE_THRESHOLD_Z_DELTA}N)"
+                )
                 self.force_threshold_reached = True
                 self.emergency_stop()
             else:
-                # Debug: log force values during movement
-                self.get_logger().debug(f"Force monitoring: X={self.current_force_x:.2f}N, Y={self.current_force_y:.2f}N, Z={self.current_force_z:.2f}N (threshold: {FORCE_THRESHOLD}N)")
+                # Debug: log force deltas during movement
+                self.get_logger().debug(
+                    f"Force monitoring: ΔX={force_x_delta:.2f}N, ΔY={force_y_delta:.2f}N, "
+                    f"ΔZ={force_z_delta:.2f}N"
+                )
 
     def emergency_stop(self):
         """Emergency stop - cancel current trajectory and stop immediately, then exit"""
@@ -391,6 +446,12 @@ class MoveDown(Node):
 
     def move_down_continue(self):
         """Continue moving down using stored position (non-blocking, called from timer)"""
+        # Reset baselines for next movement segment
+        if self.mode == 'real':
+            self.baseline_force_x = None
+            self.baseline_force_y = None
+            self.baseline_force_z = None
+        
         # Get orientation from callback data (needed for IK)
         if self.ee_quat is None:
             for _ in range(3):
@@ -415,6 +476,12 @@ class MoveDown(Node):
     
     def move_down(self):
         """Move down while maintaining current position and orientation"""
+        # Reset baseline forces for new movement sequence
+        if self.mode == 'real':
+            self.baseline_force_x = None
+            self.baseline_force_y = None
+            self.baseline_force_z = None
+        
         # Initialize current Z position if not set
         if self.current_z_position is None:
             # Read current end-effector pose
@@ -468,15 +535,34 @@ class MoveDown(Node):
             target_position[2] = self.target_height
             self.get_logger().info(f"Using specified target height: {self.target_height}m")
         else:
-            target_position[2] = self.current_z_position - MOVE_DOWN_INCREMENT
-            self.get_logger().info(f"Moving down {MOVE_DOWN_INCREMENT}m from {self.current_z_position:.3f}m to {target_position[2]:.3f}m")
+            # Move to base workspace height (MIN_WORKSPACE_Z)
+            target_position[2] = MIN_WORKSPACE_Z
+            distance_to_move = self.current_z_position - MIN_WORKSPACE_Z
+            self.get_logger().info(f"Moving down {distance_to_move:.3f}m from {self.current_z_position:.3f}m to workspace base height {MIN_WORKSPACE_Z}m")
             self.current_z_position = target_position[2]  # Update for next movement
+        
+        # Check if we're already at the target (or very close)
+        current_z = current_pos[2]
+        distance_to_target = abs(current_z - target_position[2])
+        if distance_to_target < 0.001:  # Already at target (within 1mm)
+            self.get_logger().info(f"Already at target Z position ({current_z:.3f}m). Target: {target_position[2]:.3f}m. Exiting.")
+            rclpy.shutdown()
+            return
+        
+        # Check workspace limit (safety check)
+        if target_position[2] < MIN_WORKSPACE_Z:
+            self.get_logger().error(f"Target Z position ({target_position[2]:.3f}m) is below workspace limit ({MIN_WORKSPACE_Z}m). Cannot proceed.")
+            rclpy.shutdown()
+            return
         
         self.get_logger().info(f"Target position: {target_position}")
         if self.mode == 'sim':
             self.get_logger().info(f"Gripper force threshold: {GRIPPER_FORCE_THRESHOLD}")
         else:
-            self.get_logger().info(f"Force threshold: {FORCE_THRESHOLD}N (any axis)")
+            self.get_logger().info(
+                f"Force thresholds (delta-based): |ΔX| > {FORCE_THRESHOLD_X_DELTA}N, "
+                f"|ΔY| > {FORCE_THRESHOLD_Y_DELTA}N, |ΔZ| > {FORCE_THRESHOLD_Z_DELTA}N"
+            )
 
         # Compute inverse kinematics
         try:
@@ -535,10 +621,38 @@ class MoveDown(Node):
                 orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
                 self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
             
+            # If IK failed at target Z, try incrementally higher Z values until IK succeeds
             if joint_angles is None:
-                self.get_logger().error("IK failed: couldn't compute move down position")
-                rclpy.shutdown()
-                return
+                self.get_logger().warn(f"IK failed at target Z={target_position[2]:.3f}m. Trying higher Z values...")
+                z_increment = 0.05  # Try 5cm increments
+                max_z_attempts = 10  # Try up to 0.5m above target
+                
+                for z_attempt in range(1, max_z_attempts + 1):
+                    test_z = target_position[2] + z_attempt * z_increment
+                    self.get_logger().info(f"Trying IK at Z={test_z:.3f}m (attempt {z_attempt}/{max_z_attempts})")
+                    
+                    test_position = np.array(target_position).copy()
+                    test_position[2] = test_z
+                    test_pose = target_pose.copy()
+                    test_pose[:3, 3] = test_position
+                    
+                    # Try IK with current joint angles as seed
+                    result = minimize(ik_objective_quaternion, q_guess, args=(test_pose,), 
+                                    method='L-BFGS-B', bounds=[(-np.pi, np.pi)] * 6)
+                    
+                    if result.success:
+                        cost = ik_objective_quaternion(result.x, test_pose)
+                        if cost < 0.01:
+                            self.get_logger().info(f"IK succeeded at Z={test_z:.3f}m (cost={cost:.6f})")
+                            joint_angles = result.x
+                            target_position[2] = test_z  # Update target to reachable Z
+                            self.get_logger().info(f"Updated target Z to {test_z:.3f}m (lowest reachable height)")
+                            break
+                
+                if joint_angles is None:
+                    self.get_logger().error("IK failed: couldn't compute move down position even after trying higher Z values")
+                    rclpy.shutdown()
+                    return
                 
             self.get_logger().info(f"Computed joint angles: {joint_angles}")
             
@@ -621,6 +735,17 @@ class MoveDown(Node):
                     self.current_z_position = self.ee_position[2]
                 rclpy.shutdown()
             else:
+                # Check if we're already at the target before continuing
+                if self.ee_position is not None:
+                    current_z = self.ee_position[2]
+                    target_z = MIN_WORKSPACE_Z if self.target_height is None else self.target_height
+                    distance_to_target = abs(current_z - target_z)
+                    
+                    if distance_to_target < 0.001:  # Already at target (within 1mm)
+                        self.get_logger().info(f"Already at target Z position ({current_z:.3f}m). Target: {target_z:.3f}m. Exiting.")
+                        rclpy.shutdown()
+                        return
+                
                 # Continue with next movement
                 if result.status == 5:
                     self.get_logger().warn(f"{status_msg} (not due to force). Continuing...")
@@ -667,4 +792,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-

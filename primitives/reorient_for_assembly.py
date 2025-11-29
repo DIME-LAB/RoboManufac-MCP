@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """
-Reorient for Assembly - Properly calculates EE orientation needed to achieve target object orientation
+Reorient for Assembly - Proper Fold Symmetry + Extended Cardinals
 
-The key insight: 
-- JSON contains target OBJECT orientation
-- We need to calculate target EE orientation based on current grasp
-- T_EE_target = T_object_target * T_grasp^(-1)
-where T_grasp = T_EE_current^(-1) * T_object_current
+CORRECT FOLD SYMMETRY USAGE:
+1. Target orientation from JSON is the "canonical" assembly pose
+2. Fold symmetry defines which OTHER orientations look identical
+3. Generate all equivalent targets: target × each_symmetry_rotation
+4. Find cardinal EE that places object closest to ANY equivalent target
+
+KEY: The symmetry rotations define object-frame rotations that result in
+identical appearance. So target rotated by symmetry = visually same assembly.
 """
 
 import rclpy
 from rclpy.node import Node
 from tf2_msgs.msg import TFMessage
-from geometry_msgs.msg import PoseStamped, TransformStamped
+from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import JointState
 from control_msgs.action import FollowJointTrajectory
 from rclpy.action import ActionClient
@@ -26,6 +29,7 @@ import argparse
 import time
 import sys
 import os
+import glob
 
 # Add custom libraries to Python path for IK solver
 custom_lib_path = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries"
@@ -40,645 +44,1107 @@ except ImportError as e:
 
 # Configuration
 ASSEMBLY_JSON_FILE = "/home/aaugus11/Projects/aruco-grasp-annotator/data/fmb_assembly.json"
-BASE_TOPIC = "/objects_poses_sim"
-OBJECT_TOPIC = "/objects_poses_sim"
-EE_TOPIC = "/tcp_pose_broadcaster/pose"
+SYMMETRY_DIR = "/home/aaugus11/Projects/aruco-grasp-annotator/data/symmetry"
+DEFAULT_OBJECT_TOPIC = "/objects_poses_sim"
+DEFAULT_EE_TOPIC = "/tcp_pose_broadcaster/pose"
+
+
+class ExtendedCardinalOrientations:
+    """24 extended cardinal orientations with intermediary angles"""
+    
+    @staticmethod
+    def get_all_extended_cardinals():
+        cardinals = {}
+        
+        # Primary face directions (cardinal)
+        primary_directions = {
+            'down': (180, 0),
+            'forward': (90, 0),
+            'backward': (90, 180),
+            'right': (90, -90),
+        }
+        
+        # Intermediary face directions (45° increments)
+        intermediary_directions = {
+            'forward_right': (90, -45),
+            'forward_left': (90, 45),
+            'backward_right': (90, -135),
+            'backward_left': (90, 135),
+        }
+        
+        # Roll variations for primary directions (0°, 90°, 180°, 270°)
+        roll_angles = [0, 90, 180, 270]
+        
+        # Add primary cardinal directions with roll variations (4 × 4 = 16)
+        for face_name, (pitch, yaw) in primary_directions.items():
+            for roll in roll_angles:
+                name = f"face_{face_name}_roll{roll}"
+                q = R.from_euler('xyz', [roll, pitch, yaw], degrees=True).as_quat()
+                cardinals[name] = q
+        
+        # Add intermediary directions with 2 roll variations each (4 × 2 = 8)
+        # Using only 0° and 180° rolls for intermediaries to keep total at 24
+        intermediary_rolls = [0, 180]
+        for face_name, (pitch, yaw) in intermediary_directions.items():
+            for roll in intermediary_rolls:
+                name = f"face_{face_name}_roll{roll}"
+                q = R.from_euler('xyz', [roll, pitch, yaw], degrees=True).as_quat()
+                cardinals[name] = q
+        
+        return cardinals
+    
+    @staticmethod
+    def rotation_matrix_distance(R1, R2):
+        """Angular distance between two rotation matrices in degrees."""
+        R_diff = R1.T @ R2
+        trace = np.trace(R_diff)
+        cos_angle = np.clip((trace - 1.0) / 2.0, -1.0, 1.0)
+        return np.degrees(np.arccos(cos_angle))
+    
+    @staticmethod
+    def get_cardinal_rpy(name):
+        parts = name.split('_')
+        roll = int(parts[-1].replace('roll', ''))
+        
+        # Reconstruct direction name (may have multiple parts like "forward_right")
+        direction_parts = parts[1:-1]
+        direction = '_'.join(direction_parts)
+        
+        pitch_yaw = {
+            # Primary cardinals
+            'down': (180, 0), 'up': (0, 0), 'forward': (90, 0),
+            'backward': (90, 180), 'left': (90, 90), 'right': (90, -90),
+            # Intermediary horizontal directions
+            'forward_right': (90, -45), 'forward_left': (90, 45),
+            'backward_right': (90, -135), 'backward_left': (90, 135),
+        }
+        
+        pitch, yaw = pitch_yaw.get(direction, (0, 0))
+        return (roll, pitch, yaw)
+    
+    @staticmethod
+    def find_closest_cardinal(R_orientation, threshold_deg=10.0):
+        """
+        Find the closest cardinal orientation to the given rotation matrix.
+        
+        Args:
+            R_orientation: 3x3 rotation matrix
+            threshold_deg: Maximum angular distance to be considered "close" to a cardinal
+            
+        Returns:
+            (cardinal_name, cardinal_quat, distance_deg) if within threshold, else (None, None, inf)
+        """
+        cardinals = ExtendedCardinalOrientations.get_all_extended_cardinals()
+        
+        best_name = None
+        best_quat = None
+        best_distance = float('inf')
+        
+        for card_name, card_quat in cardinals.items():
+            R_cardinal = R.from_quat(card_quat).as_matrix()
+            distance = ExtendedCardinalOrientations.rotation_matrix_distance(
+                R_orientation, R_cardinal
+            )
+            
+            if distance < best_distance:
+                best_distance = distance
+                best_name = card_name
+                best_quat = card_quat
+        
+        if best_distance <= threshold_deg:
+            return (best_name, best_quat, best_distance)
+        else:
+            return (None, None, best_distance)
+
+
+class FoldSymmetry:
+    """
+    Proper fold symmetry handling.
+    
+    The JSON stores symmetry rotations as quaternions.
+    These represent rotations IN THE OBJECT FRAME that result in identical appearance.
+    
+    For fork with 2-fold Y symmetry:
+    - Identity (0°): object as-is
+    - 180° around Y: object flipped, but looks the same
+    
+    To generate equivalent targets:
+    R_equivalent = R_target × R_symmetry  (object-frame rotation)
+    """
+    
+    @staticmethod
+    def load_symmetry_data(object_name, symmetry_dir):
+        """Load fold symmetry JSON"""
+        patterns = [
+            os.path.join(symmetry_dir, f"{object_name}_symmetry.json"),
+            os.path.join(symmetry_dir, f"{object_name}*_symmetry.json"),
+            os.path.join(symmetry_dir, f"{object_name.replace('_scaled70', '')}*_symmetry.json"),
+        ]
+        
+        for pattern in patterns:
+            if '*' in pattern:
+                matches = glob.glob(pattern)
+                if matches:
+                    with open(matches[0], 'r') as f:
+                        return json.load(f)
+            elif os.path.exists(pattern):
+                with open(pattern, 'r') as f:
+                    return json.load(f)
+        return None
+    
+    @staticmethod
+    def get_symmetry_rotations_as_matrices(fold_data):
+        """
+        Extract symmetry rotations as rotation matrices.
+        
+        Returns list of 3x3 rotation matrices representing symmetry transformations.
+        Always includes identity.
+        """
+        if fold_data is None:
+            return [np.eye(3)]
+        
+        symmetry_matrices = []
+        seen = set()
+        
+        # Always include identity
+        symmetry_matrices.append(np.eye(3))
+        seen.add(tuple(np.eye(3).flatten().round(6)))
+        
+        for axis in ['x', 'y', 'z']:
+            if axis not in fold_data.get('fold_axes', {}):
+                continue
+            
+            axis_data = fold_data['fold_axes'][axis]
+            for q_data in axis_data.get('quaternions', []):
+                q = np.array([
+                    q_data['quaternion']['x'],
+                    q_data['quaternion']['y'],
+                    q_data['quaternion']['z'],
+                    q_data['quaternion']['w']
+                ])
+                q = q / np.linalg.norm(q)
+                
+                # Convert to rotation matrix
+                R_sym = R.from_quat(q).as_matrix()
+                
+                # Check for duplicates
+                key = tuple(R_sym.flatten().round(6))
+                if key not in seen:
+                    seen.add(key)
+                    symmetry_matrices.append(R_sym)
+        
+        return symmetry_matrices
+    
+    @staticmethod
+    def generate_equivalent_target_orientations(R_target_world, fold_data, logger=None):
+        """
+        Generate all symmetry-equivalent target orientations.
+        
+        For an object with fold symmetry, multiple orientations are visually identical.
+        This generates all such equivalent orientations for the assembly target.
+        
+        Math: R_equivalent = R_target × R_symmetry
+        (Apply symmetry rotation in object's local frame)
+        
+        Args:
+            R_target_world: Target orientation as 3x3 rotation matrix (world frame)
+            fold_data: Fold symmetry data from JSON
+            logger: Optional logger for debug output
+            
+        Returns:
+            List of 3x3 rotation matrices (all equivalent target orientations)
+        """
+        symmetry_rotations = FoldSymmetry.get_symmetry_rotations_as_matrices(fold_data)
+        
+        if logger:
+            logger.info(f"  Generating equivalent targets from {len(symmetry_rotations)} symmetry rotations")
+        
+        equivalent_targets = []
+        for i, R_sym in enumerate(symmetry_rotations):
+            # Apply symmetry in object frame: R_equiv = R_target × R_sym
+            R_equivalent = R_target_world @ R_sym
+            equivalent_targets.append(R_equivalent)
+            
+            if logger:
+                rpy = R.from_matrix(R_equivalent).as_euler('xyz', degrees=True)
+                logger.info(f"    Equivalent target {i}: RPY = [{rpy[0]:.1f}, {rpy[1]:.1f}, {rpy[2]:.1f}]")
+        
+        return equivalent_targets
+
 
 class ReorientForAssembly(Node):
-    def __init__(self, base_topic=BASE_TOPIC, object_topic=OBJECT_TOPIC, ee_topic=EE_TOPIC):
+    def __init__(self, object_topic=DEFAULT_OBJECT_TOPIC, ee_topic=DEFAULT_EE_TOPIC):
         super().__init__('reorient_for_assembly')
         
-        # Load assembly configuration
         self.assembly_config = self.load_assembly_config()
+        self.symmetry_dir = SYMMETRY_DIR
         
-        # Subscribers for pose data
-        self.base_sub = self.create_subscription(TFMessage, base_topic, self.base_callback, 10)
         self.object_sub = self.create_subscription(TFMessage, object_topic, self.object_callback, 10)
         self.ee_sub = self.create_subscription(PoseStamped, ee_topic, self.ee_callback, 10)
+        self.joint_state_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, 10)
         
-        # Subscriber for joint states to get current joint angles (use as IK seed)
-        self.joint_state_sub = self.create_subscription(
-            JointState,
-            '/joint_states',
-            self.joint_state_callback,
-            10
-        )
-        
-        # Store current poses
         self.current_poses = {}
         self.current_ee_pose = None
-        
-        # Current joint angles storage
         self.current_joint_angles = None
         self.joint_angles_received = False
-        
-        # Trajectory execution state
         self.trajectory_success = False
         self.trajectory_completed = False
         
-        # Action client for trajectory execution
-        self.joint_names = [
-            "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
-            "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"
-        ]
-        self.action_client = ActionClient(self, FollowJointTrajectory, '/scaled_joint_trajectory_controller/follow_joint_trajectory')
+        self.joint_names = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
+                           "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"]
+        self.action_client = ActionClient(self, FollowJointTrajectory, 
+                                         '/scaled_joint_trajectory_controller/follow_joint_trajectory')
         
-        self.get_logger().info("ReorientForAssembly node initialized")
-        # self.get_logger().info(f"Assembly config loaded with {len(self.assembly_config.get('components', []))} components")
+        # Cardinal error threshold increment mechanism (similar to move_to_grasp)
+        self.cardinal_error_threshold_initial = 45.0  # Initial threshold in degrees
+        self.cardinal_error_threshold_max = 180.0  # Maximum threshold to try
+        self.cardinal_error_threshold_increment = 10.0  # Increment threshold by this amount each retry
+        self.current_cardinal_error_threshold = self.cardinal_error_threshold_initial
+        
+        self.get_logger().info("ReorientForAssembly initialized (Fold Symmetry + 24-Cardinal with Intermediary)")
     
     def load_assembly_config(self):
-        """Load the assembly configuration from JSON file"""
         try:
             with open(ASSEMBLY_JSON_FILE, 'r') as f:
                 return json.load(f)
-        except FileNotFoundError:
-            self.get_logger().error(f"Assembly file not found: {ASSEMBLY_JSON_FILE}")
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            self.get_logger().error(f"Error loading assembly config: {e}")
             return {}
-        except json.JSONDecodeError as e:
-            self.get_logger().error(f"Error parsing assembly JSON: {e}")
-            return {}
-    
-    def base_callback(self, msg):
-        """Callback for base poses"""
-        for transform in msg.transforms:
-            frame_id = transform.child_frame_id
-            self.current_poses[frame_id] = transform
     
     def object_callback(self, msg):
-        """Callback for object poses"""
         for transform in msg.transforms:
-            frame_id = transform.child_frame_id
-            self.current_poses[frame_id] = transform
+            self.current_poses[transform.child_frame_id] = transform
     
     def ee_callback(self, msg):
-        """Callback for end-effector pose"""
         self.current_ee_pose = msg
     
-    def joint_state_callback(self, msg: JointState):
-        """Callback for joint state data"""
-        # Extract joint angles in the correct order
+    def joint_state_callback(self, msg):
         if len(msg.name) == 6 and len(msg.position) == 6:
             joint_dict = dict(zip(msg.name, msg.position))
-            # Map joint names to positions in correct order
-            ordered_positions = []
-            for joint_name in self.joint_names:
-                if joint_name in joint_dict:
-                    ordered_positions.append(joint_dict[joint_name])
-            
-            if len(ordered_positions) == 6:
-                self.current_joint_angles = np.array(ordered_positions)
+            positions = [joint_dict.get(name, 0) for name in self.joint_names]
+            if len(positions) == 6:
+                self.current_joint_angles = np.array(positions)
                 self.joint_angles_received = True
     
-    def transform_to_matrix(self, transform):
-        """Convert ROS Transform to 4x4 transformation matrix"""
-        t = np.array([transform.translation.x, transform.translation.y, transform.translation.z])
-        q = np.array([transform.rotation.x, transform.rotation.y, transform.rotation.z, transform.rotation.w])
-        r = R.from_quat(q)
-        rotation_matrix = r.as_matrix()
-        T = np.eye(4)
-        T[:3, :3] = rotation_matrix
-        T[:3, 3] = t
-        return T
+    def get_rotation_from_transform(self, transform):
+        q = np.array([transform.rotation.x, transform.rotation.y,
+                      transform.rotation.z, transform.rotation.w])
+        return R.from_quat(q).as_matrix()
     
-    def pose_to_matrix(self, pose):
-        """Convert ROS Pose to 4x4 transformation matrix"""
-        t = np.array([pose.position.x, pose.position.y, pose.position.z])
-        q = np.array([pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w])
-        r = R.from_quat(q)
-        rotation_matrix = r.as_matrix()
-        T = np.eye(4)
-        T[:3, :3] = rotation_matrix
-        T[:3, 3] = t
-        return T
+    def get_rotation_from_quat(self, quat):
+        return R.from_quat(quat).as_matrix()
     
-    def canonicalize_euler(self, orientation):
-        """Canonicalize Euler angles - relaxed threshold for IK solver"""
-        roll, pitch, yaw = orientation
-        # Relax threshold to 5 degrees to handle small pitch variations
-        if abs(pitch) < 5 and abs(abs(roll) - 180) < 5:
-            return np.array([0.0, 180.0, (yaw % 360) - 180])
-        else:
-            return orientation
-    
-    def matrix_to_rpy(self, T):
-        """Convert 4x4 transformation matrix to position and RPY (degrees)"""
-        position = T[:3, 3]
-        rotation_matrix = T[:3, :3]
-        r = R.from_matrix(rotation_matrix)
-        rpy_rad = r.as_euler('xyz')
-        rpy_deg = np.degrees(rpy_rad)
-        # Apply canonicalization to match get_ee_pose.py
-        rpy_deg = self.canonicalize_euler(rpy_deg)
-        return position, rpy_deg
+    def get_pose_from_msg(self, pose_msg):
+        position = np.array([pose_msg.pose.position.x, pose_msg.pose.position.y,
+                            pose_msg.pose.position.z])
+        q = np.array([pose_msg.pose.orientation.x, pose_msg.pose.orientation.y,
+                      pose_msg.pose.orientation.z, pose_msg.pose.orientation.w])
+        return position, R.from_quat(q).as_matrix()
     
     def get_object_target_orientation(self, object_name):
-        """Get target orientation for object from assembly configuration (in Euler angles radians)"""
+        """
+        Get target orientation for object from assembly configuration (relative to base),
+        using the quaternion stored in the JSON.
+        
+        The JSON structure (per component) is:
+        
+        "rotation": {
+            "rpy": {
+                "x": ...,
+                "y": ...,
+                "z": ...
+            },
+            "quaternion": {
+                "x": ...,
+                "y": ...,
+                "z": ...,
+                "w": ...
+            }
+        }
+        
+        We read the quaternion directly to avoid any RPY → quaternion conversions
+        that could trigger gimbal lock.
+        """
         for component in self.assembly_config.get('components', []):
-            if component.get('name') == object_name or component.get('name') == f"{object_name}_scaled70":
+            comp_name = component.get('name', '')
+            if comp_name == object_name or comp_name == f"{object_name}_scaled70":
                 rotation = component.get('rotation', {})
-                return np.array([rotation.get('x', 0), rotation.get('y', 0), rotation.get('z', 0)])
+                quat = rotation.get('quaternion', {})
+                # Default to identity if fields are missing
+                return np.array([
+                    quat.get('x', 0.0),
+                    quat.get('y', 0.0),
+                    quat.get('z', 0.0),
+                    quat.get('w', 1.0),
+                ])
         return None
     
     def read_current_joint_angles(self):
-        """Read current joint angles using ROS2 subscriber"""
-        # self.get_logger().info("Reading current joint angles...")
-        
-        # Reset the flag
         self.joint_angles_received = False
-        
-        # Wait for joint angles to arrive (with timeout)
-        timeout_count = 0
-        max_timeout = 100  # 10 seconds (100 * 0.1s)
-        
-        while rclpy.ok() and not self.joint_angles_received and timeout_count < max_timeout:
+        timeout = 0
+        while rclpy.ok() and not self.joint_angles_received and timeout < 100:
             rclpy.spin_once(self, timeout_sec=0.1)
-            timeout_count += 1
-            
-            # if timeout_count % 10 == 0:  # Log every second
-            #     self.get_logger().info(f"Waiting for joint angles... ({timeout_count * 0.1:.1f}s)")
-        
-        if not self.joint_angles_received:
-            self.get_logger().error("Timeout waiting for joint angles message")
-            return None
-        
-        if self.current_joint_angles is None:
-            self.get_logger().error("Joint angles data is None")
-            return None
-        
-        # self.get_logger().info(f"Successfully read joint angles: {self.current_joint_angles}")
-        return self.current_joint_angles.copy()
+            timeout += 1
+        return self.current_joint_angles.copy() if self.joint_angles_received else None
     
     def compute_ik_with_current_seed(self, target_position, target_quat, max_tries=5, dx=0.001):
-        """
-        Compute IK using current joint angles as seed (similar to move_down.py)
-        
-        Args:
-            target_position: [x, y, z] target position
-            target_quat: [x, y, z, w] target orientation quaternion
-            max_tries: Number of position perturbations to try
-            dx: Position perturbation step size
-            
-        Returns:
-            Joint angles if successful, None otherwise
-        """
-        # Convert quaternion to rotation matrix
-        target_rotation = R.from_quat(target_quat)
-        target_rot_matrix = target_rotation.as_matrix()
-        
-        # Create target pose
+        target_rot = R.from_quat(target_quat).as_matrix()
         target_pose = np.eye(4)
         target_pose[:3, 3] = target_position
-        target_pose[:3, :3] = target_rot_matrix
+        target_pose[:3, :3] = target_rot
         
-        # Use current joint angles as seed
         if self.current_joint_angles is None:
-            self.get_logger().error("Current joint angles not available! Cannot compute IK.")
             return None
         
         q_guess = self.current_joint_angles.copy()
-        # self.get_logger().info(f"Using current joint angles from joint state as seed: {q_guess}")
-        
-        # Try IK with current joint angles and position perturbations
-        solution_found = False
-        best_result = None
-        best_cost = float('inf')
+        best_result, best_cost = None, float('inf')
+        joint_bounds = [(-np.pi, np.pi)] * 6
         
         for i in range(max_tries):
-            if solution_found:
-                break
-                
-            # Try small x-shift each iteration (helps with workspace boundaries)
-            perturbed_position = np.array(target_position).copy()
-            perturbed_position[0] += i * dx
+            perturbed = target_pose.copy()
+            perturbed[0, 3] += i * dx
             
-            perturbed_pose = target_pose.copy()
-            perturbed_pose[:3, 3] = perturbed_position
-            
-            joint_bounds = [(-np.pi, np.pi)] * 6
-            
-            # Use quaternion-based objective
-            result = minimize(ik_objective_quaternion, q_guess, args=(perturbed_pose,), 
+            result = minimize(ik_objective_quaternion, q_guess, args=(perturbed,),
                             method='L-BFGS-B', bounds=joint_bounds)
-            
             if result.success:
-                cost = ik_objective_quaternion(result.x, perturbed_pose)
-                
-                # Check if this is a good solution
+                cost = ik_objective_quaternion(result.x, perturbed)
                 if cost < 0.01:
-                    # self.get_logger().info(f"Quaternion-based IK succeeded with current joint angles seed (perturbation {i}), cost={cost:.6f}")
-                    
-                    # Verify orientation accuracy
-                    # T_result = forward_kinematics(dh_params, result.x)
-                    # orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
-                    # self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
-                    
                     return result.x
-                
-                # Keep track of best solution
                 if cost < best_cost:
-                    best_cost = cost
-                    best_result = result.x
+                    best_cost, best_result = cost, result.x
         
-        # If we found any reasonable solution, use it
         if best_result is not None and best_cost < 0.1:
-            # self.get_logger().info(f"Using best quaternion-based IK solution with cost={best_cost:.6f}")
-            
-            # Verify orientation accuracy
-            # T_result = forward_kinematics(dh_params, best_result)
-            # orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
-            # self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
-            
             return best_result
         
-        # Fallback: Try multiple predefined seeds if current seed failed
-        # self.get_logger().warn("IK failed with current joint angles as seed. Trying multiple predefined seeds...")
+        # Fallback seeds - use quaternion to extract yaw component without gimbal lock
+        # Extract yaw from input quaternion directly (avoids gimbal lock from RPY conversion)
+        # Yaw from quaternion: yaw = atan2(2*(w*z + x*y), 1 - 2*(y^2 + z^2))
+        yaw_rad = np.arctan2(2.0 * (target_quat[3] * target_quat[2] + target_quat[0] * target_quat[1]), 
+                            1.0 - 2.0 * (target_quat[1]**2 + target_quat[2]**2))
+        yaw_deg = np.degrees(yaw_rad)
         
-        # Convert target quaternion to RPY for seed generation
-        target_rpy_deg = R.from_matrix(target_rot_matrix).as_euler('xyz', degrees=True)
-        target_rpy_deg = target_rpy_deg.tolist()
-        
-        # Generate diverse seed configurations (similar to compute_ik_robust)
-        seed_configs = [
-            # Standard seeds
-            np.radians([85, -80, 90, -90, -90, -(np.mod(target_rpy_deg[2] + 180, 360) - 180)]),
-            np.radians([90, -90, 90, -90, -90, target_rpy_deg[2]]),
-            np.radians([0, -90, 90, -90, -90, target_rpy_deg[2]]),
-            np.radians([180, -90, 90, -90, -90, target_rpy_deg[2]]),
-            # Elbow-up configurations
-            np.radians([85, -100, 120, -110, -90, target_rpy_deg[2]]),
-            np.radians([85, -60, 60, -90, -90, target_rpy_deg[2]]),
-            # Wrist variations
-            np.radians([85, -80, 90, -90, 0, target_rpy_deg[2]]),
-            np.radians([85, -80, 90, -90, -180, target_rpy_deg[2]]),
-            # Additional variations for pitch
-            np.radians([85, -70, 80, -100, -90, target_rpy_deg[2]]),
-            np.radians([85, -90, 100, -100, -90, target_rpy_deg[2]]),
+        seeds = [
+            np.radians([85, -80, 90, -90, -90, yaw_deg]),
+            np.radians([90, -90, 90, -90, -90, yaw_deg]),
+            np.radians([0, -90, 90, -90, -90, yaw_deg]),
+            np.radians([180, -90, 90, -90, -90, yaw_deg]),
         ]
         
-        # self.get_logger().info(f"Trying {len(seed_configs)} alternative seed configurations...")
-        
-        best_result = None
-        best_cost = float('inf')
-        
-        for seed_idx, q_guess_fallback in enumerate(seed_configs):
+        for seed in seeds:
             for i in range(max_tries):
-                # Try small x-shift each iteration
-                perturbed_position = np.array(target_position).copy()
-                perturbed_position[0] += i * dx
-                
-                perturbed_pose = target_pose.copy()
-                perturbed_pose[:3, 3] = perturbed_position
-                
-                joint_bounds = [(-np.pi, np.pi)] * 6
-                
-                # Use quaternion-based objective
-                result = minimize(ik_objective_quaternion, q_guess_fallback, args=(perturbed_pose,), 
+                perturbed = target_pose.copy()
+                perturbed[0, 3] += i * dx
+                result = minimize(ik_objective_quaternion, seed, args=(perturbed,),
                                 method='L-BFGS-B', bounds=joint_bounds)
-                
                 if result.success:
-                    cost = ik_objective_quaternion(result.x, perturbed_pose)
-                    
-                    # Check if this is a good solution
+                    cost = ik_objective_quaternion(result.x, perturbed)
                     if cost < 0.01:
-                        # self.get_logger().info(f"IK succeeded with fallback seed {seed_idx+1}/{len(seed_configs)} (perturbation {i}), cost={cost:.6f}")
-                        
-                        # Verify orientation accuracy
-                        # T_result = forward_kinematics(dh_params, result.x)
-                        # orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
-                        # self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
-                        
                         return result.x
-                    
-                    # Keep track of best solution
                     if cost < best_cost:
-                        best_cost = cost
-                        best_result = result.x
+                        best_cost, best_result = cost, result.x
         
-        # If we found any reasonable solution with fallback seeds, use it
-        if best_result is not None and best_cost < 0.1:
-            # self.get_logger().info(f"Using best fallback IK solution with cost={best_cost:.6f}")
-            
-            # Verify orientation accuracy
-            # T_result = forward_kinematics(dh_params, best_result)
-            # orientation_error = np.linalg.norm(T_result[:3, :3] - target_rot_matrix)
-            # self.get_logger().info(f"Orientation error: {orientation_error:.6f}")
-            
-            return best_result
-        
-        self.get_logger().error("IK failed: couldn't find solution even with multiple seeds")
-        return None
+        return best_result if best_cost < 0.1 else None
     
-    def reorient_for_target(self, object_name, base_name, duration=20.0):
+    def compute_cardinal_to_cardinal_adjustment(self, R_object_current, R_object_target_world, 
+                                                 R_EE_current, R_grasp, fold_data):
         """
-        Calculate and execute EE reorientation to achieve target object orientation
-        
-        ONLY changes orientation, keeps current position!
-        Target orientation from JSON is relative to base frame.
-        
-        Algorithm:
-        1. T_EE_current = current end-effector pose
-        2. T_object_current = current object pose  
-        3. T_base_current = current base pose
-        4. T_grasp = T_EE_current^(-1) * T_object_current  (how EE is holding the object)
-        5. Get target orientation from JSON (relative to base)
-        6. R_object_target_world = R_base_current * R_target_relative  (transform to world frame)
-        7. T_object_target = current object position + target orientation in world frame
-        8. T_EE_target = T_object_target * T_grasp^(-1)  (required EE pose)
+        If both current and target object orientations are cardinals, compute
+        a targeted adjustment instead of searching all cardinals.
         
         Args:
-            object_name: Name of the object to reorient
-            base_name: Name of the base object
-            duration: Duration for trajectory execution
-        
-        Note:
-            The initial grasp relationship (relative rotation between gripper and object) is preserved.
-            The object's absolute orientation changes to match the target, but the way the object is held
-            relative to the gripper remains unchanged throughout the reorientation.
-            This shouldnt be the case ideally- need to fix this after fixing the physics of the object in arm simulation
-            and after fixing the real world object pose detection.
+            R_object_current: Current object orientation (3x3 matrix)
+            R_object_target_world: Target object orientation (3x3 matrix)
+            R_EE_current: Current EE orientation (3x3 matrix)
+            R_grasp: Grasp relationship (3x3 matrix)
+            fold_data: Fold symmetry data
+            
+        Returns:
+            (success, best_quat, resulting_object_R, matched_target_R, object_error)
+            or (False, None, None, None, inf) if optimization not applicable
         """
-        # self.get_logger().info(f"Calculating reorientation for {object_name} relative to {base_name}")
+        CARDINAL_THRESHOLD = 45.0  # degrees
         
-        # Wait for pose data
-        if not self.current_poses or self.current_ee_pose is None:
-            self.get_logger().error("No pose data available")
-            return None
+        # Check if current object is close to a cardinal
+        current_cardinal_name, current_cardinal_quat, current_dist = \
+            ExtendedCardinalOrientations.find_closest_cardinal(R_object_current, CARDINAL_THRESHOLD)
         
-        # Get current EE pose
-        if object_name not in self.current_poses:
-            self.get_logger().error(f"Object {object_name} not found in poses")
-            # Try with _scaled70 suffix
-            object_name = f"{object_name}_scaled70"
-            if object_name not in self.current_poses:
-                self.get_logger().error(f"Object {object_name} not found")
-                return None
+        if current_cardinal_name is None:
+            self.get_logger().info(f"  Current object not in cardinal pose (closest: {current_dist:.1f}°)")
+            return (False, None, None, None, float('inf'))
         
-        # Check if base exists
-        if base_name not in self.current_poses:
-            base_name = f"{base_name}_scaled70"
-            if base_name not in self.current_poses:
-                self.get_logger().error(f"Base {base_name} not found")
-                return None
+        self.get_logger().info(f"  ✓ Current object is in cardinal pose: {current_cardinal_name} (error: {current_dist:.1f}°)")
         
-        # Convert poses to matrices
-        T_EE_current = self.pose_to_matrix(self.current_ee_pose.pose)
-        T_object_current = self.transform_to_matrix(self.current_poses[object_name].transform)
-        T_base_current = self.transform_to_matrix(self.current_poses[base_name].transform)
-        
-        # Calculate grasp transformation
-        T_grasp = np.linalg.inv(T_EE_current) @ T_object_current
-        
-        # Get current positions
-        ee_current_position, ee_current_rpy = self.matrix_to_rpy(T_EE_current)
-        object_current_position, object_current_rpy = self.matrix_to_rpy(T_object_current)
-        base_current_position, base_current_rpy = self.matrix_to_rpy(T_base_current)
-        grasp_position, grasp_rpy = self.matrix_to_rpy(T_grasp)
-        
-        # self.get_logger().info(f"DEBUG: Grasp transformation: Position={grasp_position} RPY={grasp_rpy}")
-        
-        # Get target object orientation from JSON (relative to base frame)
-        target_euler_relative = self.get_object_target_orientation(object_name)
-        if target_euler_relative is None:
-            self.get_logger().error(f"No target orientation found for {object_name}")
-            return None
-        
-        # Transform target orientation from base frame to world frame
-        # R_object_target_world = R_base_current * R_target_relative
-        R_base_current = T_base_current[:3, :3]
-        R_target_relative = R.from_euler('xyz', target_euler_relative).as_matrix()
-        R_object_target_world = R_base_current @ R_target_relative
-        
-        # Create target object transformation matrix (keep current position, apply world-frame orientation)
-        T_object_target = np.eye(4)
-        T_object_target[:3, :3] = R_object_target_world
-        T_object_target[:3, 3] = T_object_current[:3, 3]  # Keep current object position
-        
-        # Calculate required EE pose
-        T_EE_target = T_object_target @ np.linalg.inv(T_grasp)
-        
-        # Extract target position and quaternion
-        ee_target_position = T_EE_target[:3, 3]
-        ee_target_rot_matrix = T_EE_target[:3, :3]
-        ee_target_rotation = R.from_matrix(ee_target_rot_matrix)
-        ee_target_quat = ee_target_rotation.as_quat()  # [x, y, z, w]
-        
-        # Convert to position and RPY for logging (already canonicalized by matrix_to_rpy)
-        ee_target_position_rpy, ee_target_rpy = self.matrix_to_rpy(T_EE_target)
-        object_target_position, object_target_rpy = self.matrix_to_rpy(T_object_target)
-        
-        # self.get_logger().info(f"DEBUG: Target EE position: {ee_target_position}")
-        # self.get_logger().info(f"DEBUG: Target EE quaternion: {ee_target_quat}")
-        # self.get_logger().info(f"DEBUG: Target EE RPY: {ee_target_rpy}")
-        
-        # Log the calculations
-        # self.get_logger().info("=" * 80)
-        # self.get_logger().info("REORIENTATION CALCULATION:")
-        # self.get_logger().info("")
-        # self.get_logger().info("CURRENT STATE:")
-        # self.get_logger().info(f"  Current Base: Position={base_current_position} RPY={base_current_rpy}")
-        # self.get_logger().info(f"  Current EE: Position={ee_current_position} RPY={ee_current_rpy}")
-        # self.get_logger().info(f"  Current Object: Position={object_current_position} RPY={object_current_rpy}")
-        # self.get_logger().info("")
-        # self.get_logger().info("TARGET STATE:")
-        # self.get_logger().info(f"  Target Object Orientation (from JSON, relative to base): {np.degrees(target_euler_relative)} degrees")
-        # self.get_logger().info(f"  Target Object Orientation (world frame): RPY={object_target_rpy}")
-        # self.get_logger().info(f"  Target Object: Position={object_target_position} RPY={object_target_rpy}")
-        # self.get_logger().info(f"  Calculated Target EE: Position={ee_target_position} RPY={ee_target_rpy}")
-        # self.get_logger().info("=" * 80)
-        
-        # Generate trajectory using current joint angles as seed
-        # self.get_logger().info("Generating trajectory using current joint angles as seed...")
-        
-        # Read current joint angles
-        if self.current_joint_angles is None:
-            joint_angles = self.read_current_joint_angles()
-            if joint_angles is None:
-                self.get_logger().error("Could not read current joint angles")
-                return False
-        else:
-            joint_angles = self.current_joint_angles.copy()
-        
-        # Compute IK using current joint angles as seed
-        computed_joint_angles = self.compute_ik_with_current_seed(
-            ee_target_position.tolist(),
-            ee_target_quat.tolist(),
-            max_tries=5,
-            dx=0.001
+        # Generate equivalent targets and check if any is close to a cardinal
+        equivalent_targets = FoldSymmetry.generate_equivalent_target_orientations(
+            R_object_target_world, fold_data, None  # Don't log here
         )
         
-        if computed_joint_angles is None:
-            self.get_logger().error("Failed to compute IK for target pose")
+        # First, find which equivalent target is closest to a cardinal (for validation)
+        best_target_cardinal = None
+        best_target_cardinal_quat = None
+        best_target_dist = float('inf')
+        
+        for R_target_equiv in equivalent_targets:
+            target_cardinal_name, target_cardinal_quat, target_dist = \
+                ExtendedCardinalOrientations.find_closest_cardinal(R_target_equiv, CARDINAL_THRESHOLD)
+            
+            if target_cardinal_name is not None and target_dist < best_target_dist:
+                best_target_dist = target_dist
+                best_target_cardinal = target_cardinal_name
+                best_target_cardinal_quat = target_cardinal_quat
+        
+        if best_target_cardinal is None:
+            self.get_logger().info(f"  Target not in cardinal pose (closest: {best_target_dist:.1f}°)")
+            return (False, None, None, None, float('inf'))
+        
+        self.get_logger().info(f"  ✓ Target is in cardinal pose: {best_target_cardinal} (error: {best_target_dist:.1f}°)")
+        
+        # Now find the equivalent target that's closest to the CURRENT object orientation
+        # This ensures we make the smallest possible adjustment
+        best_target_R = None
+        min_distance_to_current = float('inf')
+        
+        for R_target_equiv in equivalent_targets:
+            # Check if this equivalent target is close to a cardinal (must be valid)
+            target_cardinal_name, _, target_dist = \
+                ExtendedCardinalOrientations.find_closest_cardinal(R_target_equiv, CARDINAL_THRESHOLD)
+            
+            if target_cardinal_name is not None:
+                # Calculate distance from current object to this equivalent target
+                distance_to_current = ExtendedCardinalOrientations.rotation_matrix_distance(
+                    R_object_current, R_target_equiv
+                )
+                
+                if distance_to_current < min_distance_to_current:
+                    min_distance_to_current = distance_to_current
+                    best_target_R = R_target_equiv
+        
+        if best_target_R is None:
+            # Fallback: use the first equivalent target that's close to a cardinal
+            for R_target_equiv in equivalent_targets:
+                target_cardinal_name, _, _ = \
+                    ExtendedCardinalOrientations.find_closest_cardinal(R_target_equiv, CARDINAL_THRESHOLD)
+                if target_cardinal_name is not None:
+                    best_target_R = R_target_equiv
+                    break
+        
+        if best_target_R is None:
+            self.get_logger().error("  Failed to find valid equivalent target")
+            return (False, None, None, None, float('inf'))
+        
+        # Log which equivalent target we're using
+        target_rpy = R.from_matrix(best_target_R).as_euler('xyz', degrees=True)
+        self.get_logger().info(f"  → Using equivalent target RPY: [{target_rpy[0]:.1f}, {target_rpy[1]:.1f}, {target_rpy[2]:.1f}] (closest to current: {min_distance_to_current:.1f}°)")
+        
+        # Compute the rotation needed to go from current object to best target
+        # R_adjust_object = R_target @ R_current^T
+        R_adjust_object = best_target_R @ R_object_current.T
+        
+        # Apply this adjustment to the EE
+        # Since R_object = R_EE @ R_grasp, we have:
+        # R_EE_new @ R_grasp = R_adjust_object @ (R_EE_current @ R_grasp)
+        # R_EE_new @ R_grasp = R_adjust_object @ R_EE_current @ R_grasp
+        # R_EE_new = R_adjust_object @ R_EE_current
+        R_EE_new = R_adjust_object @ R_EE_current
+        
+        # Verify the result
+        R_object_result = R_EE_new @ R_grasp
+        object_error = ExtendedCardinalOrientations.rotation_matrix_distance(
+            R_object_result, best_target_R
+        )
+        
+        # Calculate the actual adjustment angle
+        adjustment_angle = ExtendedCardinalOrientations.rotation_matrix_distance(
+            R_object_current, best_target_R
+        )
+        
+        # Always snap EE to nearest cardinal if within threshold
+        EE_cardinal_name, EE_cardinal_quat, EE_cardinal_dist = \
+            ExtendedCardinalOrientations.find_closest_cardinal(R_EE_new, threshold_deg=15.0)
+        
+        if EE_cardinal_name is not None:
+            # Save original object error for logging
+            original_object_error = object_error
+            
+            # Use the cardinal EE orientation
+            R_EE_cardinal = R.from_quat(EE_cardinal_quat).as_matrix()
+            R_object_from_cardinal = R_EE_cardinal @ R_grasp
+            
+            # Find the closest equivalent target to the object orientation from cardinal EE
+            cardinal_object_error = float('inf')
+            best_cardinal_target_R = None
+            for R_target_equiv in equivalent_targets:
+                error = ExtendedCardinalOrientations.rotation_matrix_distance(
+                    R_object_from_cardinal, R_target_equiv
+                )
+                if error < cardinal_object_error:
+                    cardinal_object_error = error
+                    best_cardinal_target_R = R_target_equiv
+            
+            # Always snap to cardinal (prioritize EE cardinal pose over object error)
+            R_EE_new = R_EE_cardinal
+            R_object_result = R_object_from_cardinal
+            object_error = cardinal_object_error
+            best_target_R = best_cardinal_target_R
+            
+            if cardinal_object_error > original_object_error:
+                self.get_logger().info(f"  → Snapped EE to cardinal: {EE_cardinal_name} (EE error: {EE_cardinal_dist:.1f}°, object error increased from {original_object_error:.1f}° to {cardinal_object_error:.1f}°)")
+            else:
+                self.get_logger().info(f"  → Snapped EE to cardinal: {EE_cardinal_name} (EE error: {EE_cardinal_dist:.1f}°, object error: {object_error:.1f}°)")
+        
+        # Convert to quaternion
+        best_quat = R.from_matrix(R_EE_new).as_quat()
+        
+        # Log the adjustment
+        if current_cardinal_name == best_target_cardinal:
+            self.get_logger().info(f"  → Targeted adjustment: {current_cardinal_name} → {best_target_cardinal} (same cardinal, {adjustment_angle:.1f}° rotation needed)")
+        else:
+            self.get_logger().info(f"  → Targeted adjustment: {current_cardinal_name} → {best_target_cardinal} ({adjustment_angle:.1f}° rotation)")
+        self.get_logger().info(f"  → Final object error: {object_error:.1f}°")
+        
+        return (True, best_quat, R_object_result, best_target_R, object_error)
+    
+    def find_best_cardinal_for_assembly(self, R_object_target_world, R_grasp, fold_data, R_object_current=None, R_EE_current=None):
+        """
+        Find the cardinal EE orientation that places the OBJECT closest 
+        to a valid assembly pose (considering fold symmetry).
+        
+        Algorithm:
+        1. Generate all equivalent target orientations using fold symmetry
+        2. If current object is already close to canonical, prefer minimal adjustments:
+           - Find closest equivalent target to current object
+           - Calculate EE orientation that would achieve that target
+           - Find closest cardinal to that EE orientation
+        3. Otherwise, for each of 24 extended cardinal EE orientations:
+           - Calculate resulting object orientation: R_object = R_EE × R_grasp
+           - Find minimum distance to ANY equivalent target
+           - Calculate rotation distance from current EE to this cardinal
+        4. Return cardinal with best object alignment error, preferring smaller EE rotations
+           when object errors are similar (within 5° tolerance)
+        """
+        # Generate all symmetry-equivalent target orientations
+        equivalent_targets = FoldSymmetry.generate_equivalent_target_orientations(
+            R_object_target_world, fold_data, self.get_logger()
+        )
+        
+        cardinals = ExtendedCardinalOrientations.get_all_extended_cardinals()
+        
+        best_cardinal_name = None
+        best_cardinal_quat = None
+        best_resulting_object_R = None
+        best_matched_target_R = None
+        best_object_error = float('inf')
+        
+        # If current object orientation is provided, check if it's already close to canonical
+        if R_object_current is not None:
+            # Find closest equivalent target to current object
+            min_distance_to_current = float('inf')
+            closest_target_to_current = None
+            for R_target_equiv in equivalent_targets:
+                distance = ExtendedCardinalOrientations.rotation_matrix_distance(
+                    R_object_current, R_target_equiv
+                )
+                if distance < min_distance_to_current:
+                    min_distance_to_current = distance
+                    closest_target_to_current = R_target_equiv
+            
+            # If current object is already close to canonical (within 15°), prefer minimal adjustment
+            if min_distance_to_current < 15.0:
+                self.get_logger().info(f"  Current object is close to canonical ({min_distance_to_current:.1f}°). Preferring minimal adjustment...")
+                
+                # Calculate current EE orientation from current object and grasp
+                # R_object_current = R_EE_current @ R_grasp
+                # So: R_EE_current = R_object_current @ R_grasp^T
+                R_EE_current = R_object_current @ R_grasp.T
+                
+                # Calculate the minimal adjustment needed for the object: R_adjust_object = R_target @ R_current^T
+                R_adjust_object = closest_target_to_current @ R_object_current.T
+                
+                # Apply this adjustment to the EE: R_EE_new = R_adjust_object @ R_EE_current
+                R_EE_desired = R_adjust_object @ R_EE_current
+                
+                # Find closest cardinal to this desired EE orientation
+                EE_cardinal_name, EE_cardinal_quat, EE_cardinal_dist = \
+                    ExtendedCardinalOrientations.find_closest_cardinal(R_EE_desired, threshold_deg=180.0)
+                
+                if EE_cardinal_name is not None:
+                    # Check if this cardinal gives acceptable object error
+                    R_EE_cardinal = R.from_quat(EE_cardinal_quat).as_matrix()
+                    R_object_from_cardinal = R_EE_cardinal @ R_grasp
+                    
+                    # Find closest equivalent target to this result
+                    min_error_for_cardinal = float('inf')
+                    best_target_for_cardinal = None
+                    for R_target_equiv in equivalent_targets:
+                        error = ExtendedCardinalOrientations.rotation_matrix_distance(
+                            R_object_from_cardinal, R_target_equiv
+                        )
+                        if error < min_error_for_cardinal:
+                            min_error_for_cardinal = error
+                            best_target_for_cardinal = R_target_equiv
+                    
+                    # If this gives reasonable error, use it
+                    if min_error_for_cardinal < 30.0:  # Reasonable threshold
+                        self.get_logger().info(f"  → Using minimal adjustment cardinal: {EE_cardinal_name} (object error: {min_error_for_cardinal:.1f}°)")
+                        return (EE_cardinal_name, EE_cardinal_quat, R_object_from_cardinal,
+                                best_target_for_cardinal, min_error_for_cardinal, None)
+        
+        self.get_logger().info(f"  Testing {len(cardinals)} cardinals × {len(equivalent_targets)} equivalent targets...")
+        
+        # Collect all candidates with their errors and EE rotation distances
+        candidates = []
+        
+        for card_name, card_quat in cardinals.items():
+            # What object orientation results from this cardinal EE?
+            R_EE_cardinal = R.from_quat(card_quat).as_matrix()
+            R_object_result = R_EE_cardinal @ R_grasp
+            
+            # Find closest equivalent target
+            min_error_for_cardinal = float('inf')
+            best_target_for_cardinal = None
+            for R_target_equiv in equivalent_targets:
+                error = ExtendedCardinalOrientations.rotation_matrix_distance(
+                    R_object_result, R_target_equiv
+                )
+                if error < min_error_for_cardinal:
+                    min_error_for_cardinal = error
+                    best_target_for_cardinal = R_target_equiv
+            
+            # Calculate rotation distance from current EE to this cardinal (if current EE is available)
+            ee_rotation_distance = 0.0
+            if R_EE_current is not None:
+                ee_rotation_distance = ExtendedCardinalOrientations.rotation_matrix_distance(
+                    R_EE_current, R_EE_cardinal
+                )
+            
+            candidates.append((
+                card_name, card_quat, R_object_result, 
+                best_target_for_cardinal, min_error_for_cardinal, ee_rotation_distance
+            ))
+            
+            if min_error_for_cardinal < best_object_error:
+                best_object_error = min_error_for_cardinal
+                best_cardinal_name = card_name
+                best_cardinal_quat = card_quat
+                best_resulting_object_R = R_object_result
+                best_matched_target_R = best_target_for_cardinal
+        
+        # Sort candidates: first by object error, then by EE rotation distance (when errors are similar)
+        # Use a tolerance of 5° - if two candidates have object errors within 5°, prefer the one with smaller EE rotation
+        error_tolerance = 5.0  # degrees
+        
+        def sort_key(candidate):
+            obj_error = candidate[4]
+            ee_rotation = candidate[5]
+            # Primary sort: object error (rounded to nearest tolerance)
+            # Secondary sort: EE rotation distance
+            error_bucket = round(obj_error / error_tolerance) * error_tolerance
+            return (error_bucket, ee_rotation)
+        
+        candidates.sort(key=sort_key)
+        
+        # Update best selection if we have a better candidate (same error but smaller rotation)
+        if len(candidates) > 0:
+            best_candidate = candidates[0]
+            best_object_error = best_candidate[4]
+            best_cardinal_name = best_candidate[0]
+            best_cardinal_quat = best_candidate[1]
+            best_resulting_object_R = best_candidate[2]
+            best_matched_target_R = best_candidate[3]
+            
+            # Log if we're choosing a different cardinal due to smaller rotation
+            if R_EE_current is not None and len(candidates) > 1:
+                # Check if there are other candidates with similar error
+                for i in range(1, min(5, len(candidates))):  # Check top 5 candidates
+                    other_candidate = candidates[i]
+                    if abs(other_candidate[4] - best_object_error) <= error_tolerance:
+                        if other_candidate[5] < best_candidate[5]:
+                            # Found a candidate with similar error but smaller rotation
+                            self.get_logger().info(
+                                f"  → Preferring {other_candidate[0]} over {best_candidate[0]} "
+                                f"(object error: {other_candidate[4]:.1f}° vs {best_candidate[4]:.1f}°, "
+                                f"EE rotation: {other_candidate[5]:.1f}° vs {best_candidate[5]:.1f}°)"
+                            )
+                            best_candidate = other_candidate
+                            best_cardinal_name = other_candidate[0]
+                            best_cardinal_quat = other_candidate[1]
+                            best_resulting_object_R = other_candidate[2]
+                            best_matched_target_R = other_candidate[3]
+                            break
+        
+        return (best_cardinal_name, best_cardinal_quat, best_resulting_object_R, 
+                best_matched_target_R, best_object_error, candidates)
+    
+    def reorient_for_target(self, object_name, base_name, duration=5.0,
+                            current_object_orientation=None, target_base_orientation=None):
+        """Reorient EE so OBJECT ends up at a valid assembly pose."""
+        
+        self.get_logger().info(f"Reorienting {object_name} relative to {base_name}")
+        self.get_logger().info("Mode: Fold Symmetry + 24-Cardinal Snap")
+        
+        # === Get current EE pose ===
+        if self.current_ee_pose is None:
+            self.get_logger().error("EE pose not available")
+            return False
+        ee_position, R_EE_current = self.get_pose_from_msg(self.current_ee_pose)
+        
+        # === Get current object orientation ===
+        if current_object_orientation is not None:
+            R_object_current = self.get_rotation_from_quat(current_object_orientation)
+            self.get_logger().info(f"  Using provided object orientation")
+        else:
+            obj_key = object_name if object_name in self.current_poses else f"{object_name}_scaled70"
+            if obj_key not in self.current_poses:
+                self.get_logger().error(f"Object {object_name} not found")
+                return False
+            R_object_current = self.get_rotation_from_transform(self.current_poses[obj_key].transform)
+        
+        # === Get base orientation ===
+        if target_base_orientation is not None:
+            R_base = self.get_rotation_from_quat(target_base_orientation)
+            self.get_logger().info(f"  Using provided base orientation")
+        else:
+            base_key = base_name if base_name in self.current_poses else f"{base_name}_scaled70"
+            if base_key not in self.current_poses:
+                self.get_logger().error(f"Base {base_name} not found")
+                return False
+            R_base = self.get_rotation_from_transform(self.current_poses[base_key].transform)
+        
+        # === Get target orientation from JSON (relative to base, quaternion) ===
+        target_quat = self.get_object_target_orientation(object_name)
+        if target_quat is None:
+            target_quat = self.get_object_target_orientation(f"{object_name}_scaled70")
+        if target_quat is None:
+            self.get_logger().error(f"No target orientation for {object_name}")
             return False
         
-        # self.get_logger().info(f"Computed joint angles: {computed_joint_angles}")
+        # === Load fold symmetry ===
+        fold_data = FoldSymmetry.load_symmetry_data(object_name, self.symmetry_dir)
+        if fold_data is None:
+            fold_data = FoldSymmetry.load_symmetry_data(f"{object_name}_scaled70", self.symmetry_dir)
         
-        # Create trajectory point
-        trajectory_points = [{
-            "positions": [float(x) for x in computed_joint_angles],
+        self.get_logger().info("=" * 70)
+        if fold_data:
+            self.get_logger().info(f"  Loaded fold symmetry for {object_name}:")
+            for axis, data in fold_data.get('fold_axes', {}).items():
+                fold_count = data.get('fold', 1)
+                if fold_count > 1:
+                    self.get_logger().info(f"    {axis.upper()}-axis: {fold_count}-fold symmetry")
+        else:
+            self.get_logger().info("  No fold symmetry data (identity only)")
+        
+        # === Calculate grasp rotation ===
+        # R_grasp = R_EE^T × R_object (object orientation relative to EE frame)
+        R_grasp = R_EE_current.T @ R_object_current
+        
+        # === Transform target to world frame ===
+        # Use quaternion from JSON directly to avoid gimbal-lock-sensitive conversions.
+        R_target_relative = R.from_quat(target_quat).as_matrix()
+        R_object_target_world = R_base @ R_target_relative
+        
+        # Log current state
+        current_obj_rpy = R.from_matrix(R_object_current).as_euler('xyz', degrees=True)
+        target_world_rpy = R.from_matrix(R_object_target_world).as_euler('xyz', degrees=True)
+        # For logging: derive the relative target RPY from the quaternion
+        target_relative_rpy = R.from_quat(target_quat).as_euler('xyz', degrees=True)
+        
+        self.get_logger().info(f"  Current object RPY: [{current_obj_rpy[0]:.1f}, {current_obj_rpy[1]:.1f}, {current_obj_rpy[2]:.1f}]")
+        self.get_logger().info(
+            f"  Target (relative to base, RPY from quat): "
+            f"[{target_relative_rpy[0]:.1f}, {target_relative_rpy[1]:.1f}, {target_relative_rpy[2]:.1f}]"
+        )
+        self.get_logger().info(
+            f"  Target (world frame, RPY): "
+            f"[{target_world_rpy[0]:.1f}, {target_world_rpy[1]:.1f}, {target_world_rpy[2]:.1f}]"
+        )
+        
+        # === Try cardinal-to-cardinal optimization first ===
+        self.get_logger().info("-" * 70)
+        self.get_logger().info("  Attempting cardinal-to-cardinal optimization...")
+        (optimization_success, best_quat, resulting_object_R, 
+         matched_target_R, object_error) = self.compute_cardinal_to_cardinal_adjustment(
+            R_object_current, R_object_target_world, R_EE_current, R_grasp, fold_data
+        )
+        
+        candidates = None  # Will store alternative cardinals if optimization fails
+        
+        if optimization_success:
+            # Find the cardinal name for logging
+            R_EE_result = R.from_quat(best_quat).as_matrix()
+            best_cardinal_name, _, _ = ExtendedCardinalOrientations.find_closest_cardinal(
+                R_EE_result, threshold_deg=180.0  # Always find closest
+            )
+            if best_cardinal_name is None:
+                best_cardinal_name = "computed_adjustment"
+            best_cardinal = best_cardinal_name
+            best_quat_cardinal = best_quat  # Already a cardinal from compute_cardinal_to_cardinal_adjustment
+            # Use the values already computed from optimization
+            cardinal_object_error = object_error
+            self.get_logger().info("  ✓ Using cardinal-to-cardinal optimization")
+        else:
+            # === Fall back to full search ===
+            self.get_logger().info("  → Falling back to full cardinal search...")
+            (best_cardinal, best_quat_cardinal, resulting_object_R, 
+             matched_target_R, object_error, candidates) = self.find_best_cardinal_for_assembly(
+                R_object_target_world, R_grasp, fold_data, R_object_current, R_EE_current
+            )
+            # best_quat_cardinal is already a cardinal quaternion from find_best_cardinal_for_assembly
+            cardinal_object_error = object_error
+        
+        # === Try cardinals with threshold increment (ALWAYS use canonical) ===
+        # Try the best cardinal first, then try alternatives if error is too high
+        
+        # Reset threshold for this reorientation attempt
+        self.current_cardinal_error_threshold = self.cardinal_error_threshold_initial
+        
+        # Try candidates in order (best first)
+        candidate_index = 0
+        cardinal_found = False
+        
+        # Prepare candidate list - if we have candidates, use them; otherwise use the best one
+        if candidates is not None and len(candidates) > 0:
+            candidate_list = candidates
+        else:
+            # Create a single candidate from the best cardinal (include EE rotation distance as 6th element)
+            # Use 0.0 as placeholder since we don't have R_EE_current at this point
+            candidate_list = [(best_cardinal, best_quat_cardinal, resulting_object_R, matched_target_R, cardinal_object_error, 0.0)]
+        
+        while not cardinal_found and candidate_index < len(candidate_list):
+            # Get current candidate (now includes EE rotation distance as 6th element)
+            card_name, card_quat, card_object_R, card_target_R, card_error, _ = candidate_list[candidate_index]
+            
+            if candidate_index > 0:
+                self.get_logger().info(f"  🔄 Trying alternative cardinal {candidate_index + 1}/{len(candidate_list)}: {card_name} (object error: {card_error:.1f}°)")
+            
+            # Recalculate object error from this cardinal to ensure consistency
+            R_EE_cardinal = R.from_quat(card_quat).as_matrix()
+            R_object_from_cardinal = R_EE_cardinal @ R_grasp
+            
+            # Find the closest equivalent target to the object orientation from cardinal EE
+            equivalent_targets = FoldSymmetry.generate_equivalent_target_orientations(
+                R_object_target_world, fold_data, None
+            )
+            cardinal_object_error = float('inf')
+            best_cardinal_target_R = None
+            for R_target_equiv in equivalent_targets:
+                error = ExtendedCardinalOrientations.rotation_matrix_distance(
+                    R_object_from_cardinal, R_target_equiv
+                )
+                if error < cardinal_object_error:
+                    cardinal_object_error = error
+                    best_cardinal_target_R = R_target_equiv
+            
+            # Reset threshold for this candidate
+            self.current_cardinal_error_threshold = self.cardinal_error_threshold_initial
+            
+            # Check if object error is acceptable with threshold increment
+            while cardinal_object_error > self.current_cardinal_error_threshold:
+                if self.current_cardinal_error_threshold < self.cardinal_error_threshold_max:
+                    old_threshold = self.current_cardinal_error_threshold
+                    self.current_cardinal_error_threshold = min(
+                        self.current_cardinal_error_threshold + self.cardinal_error_threshold_increment,
+                        self.cardinal_error_threshold_max
+                    )
+                    self.get_logger().info(f"  🔄 Cardinal object error ({cardinal_object_error:.1f}°) > threshold ({old_threshold:.1f}°), incrementing to {self.current_cardinal_error_threshold:.1f}°...")
+                else:
+                    # Max threshold reached for this candidate - try next candidate
+                    self.get_logger().info(f"  ⚠️ Max threshold reached for {card_name} (object error: {cardinal_object_error:.1f}°). Trying next candidate...")
+                    break
+            
+            # Check if this candidate is acceptable
+            if cardinal_object_error <= self.current_cardinal_error_threshold:
+                # Found acceptable cardinal
+                best_cardinal = card_name
+                best_quat_cardinal = card_quat
+                resulting_object_R = R_object_from_cardinal
+                matched_target_R = best_cardinal_target_R
+                cardinal_found = True
+            else:
+                # This candidate not acceptable, try next one
+                candidate_index += 1
+        
+        if not cardinal_found:
+            # All candidates exhausted - use the best one anyway (always use canonical)
+            self.get_logger().warn(f"  ⚠️ All {len(candidate_list)} candidates exhausted. Using best cardinal anyway (object error: {cardinal_object_error:.1f}°)")
+            best_cardinal = candidate_list[0][0]
+            best_quat_cardinal = candidate_list[0][1]
+            R_EE_cardinal = R.from_quat(best_quat_cardinal).as_matrix()
+            R_object_from_cardinal = R_EE_cardinal @ R_grasp
+            resulting_object_R = R_object_from_cardinal
+            matched_target_R = candidate_list[0][3]
+            cardinal_object_error = candidate_list[0][4]
+            best_cardinal_target_R = matched_target_R
+            self.current_cardinal_error_threshold = self.cardinal_error_threshold_max
+        
+        # Always use the cardinal (canonical orientation)
+        best_quat = best_quat_cardinal
+        object_error = cardinal_object_error
+        
+        if self.current_cardinal_error_threshold > self.cardinal_error_threshold_initial:
+            self.get_logger().info(f"  → Using cardinal: {best_cardinal} (object error: {cardinal_object_error:.1f}°, threshold: {self.current_cardinal_error_threshold:.1f}°)")
+        else:
+            self.get_logger().info(f"  → Using cardinal: {best_cardinal} (object error: {cardinal_object_error:.1f}°)")
+        
+        # === Log results ===
+        resulting_rpy = R.from_matrix(resulting_object_R).as_euler('xyz', degrees=True)
+        matched_rpy = R.from_matrix(matched_target_R).as_euler('xyz', degrees=True)
+        EE_rpy = R.from_matrix(R.from_quat(best_quat).as_matrix()).as_euler('xyz', degrees=True)
+        
+        self.get_logger().info("-" * 70)
+        self.get_logger().info(f"  RESULT:")
+        self.get_logger().info(f"    Best cardinal: {best_cardinal}")
+        self.get_logger().info(f"    Cardinal RPY: {ExtendedCardinalOrientations.get_cardinal_rpy(best_cardinal)}")
+        self.get_logger().info(f"    Calculated EE RPY: [{EE_rpy[0]:.1f}, {EE_rpy[1]:.1f}, {EE_rpy[2]:.1f}]")
+        self.get_logger().info(f"    Matched equivalent target RPY: [{matched_rpy[0]:.1f}, {matched_rpy[1]:.1f}, {matched_rpy[2]:.1f}]")
+        self.get_logger().info(f"    Resulting object RPY: [{resulting_rpy[0]:.1f}, {resulting_rpy[1]:.1f}, {resulting_rpy[2]:.1f}]")
+        self.get_logger().info(f"    OBJECT alignment error: {object_error:.1f}°")
+        self.get_logger().info(f"    EE Position: {ee_position} (unchanged)")
+        self.get_logger().info("=" * 70)
+        
+        # === Check if error is acceptable ===
+        if object_error > 30.0:
+            self.get_logger().warn(f"⚠️ High alignment error ({object_error:.1f}°) - result may not be ideal")
+        
+        # === Compute IK ===
+        if self.current_joint_angles is None:
+            if self.read_current_joint_angles() is None:
+                self.get_logger().error("Could not read joint angles")
+                return False
+        
+        # Try IK with best solution first
+        joint_angles = self.compute_ik_with_current_seed(ee_position.tolist(), best_quat.tolist())
+        
+        # If IK fails and we have alternative candidates, try them
+        if joint_angles is None and candidates is not None:
+            self.get_logger().warn(f"  ⚠️ IK failed for best cardinal '{best_cardinal}'. Trying alternatives...")
+            for i, (card_name, card_quat, card_object_R, card_target_R, card_error, _) in enumerate(candidates[1:6], 1):  # Try top 5 alternatives
+                # Snap to exact equivalent target
+                R_EE_card_exact = card_target_R @ R_grasp.T
+                card_quat_exact = R.from_matrix(R_EE_card_exact).as_quat()
+                
+                # Verify exact result
+                R_object_card_exact = R_EE_card_exact @ R_grasp
+                card_exact_error = ExtendedCardinalOrientations.rotation_matrix_distance(
+                    R_object_card_exact, card_target_R
+                )
+                
+                if card_exact_error < 1.0:
+                    card_quat = card_quat_exact
+                    card_object_R = R_object_card_exact
+                    card_error = card_exact_error
+                
+                self.get_logger().info(f"  Trying alternative {i}: {card_name} (object error: {card_error:.1f}°)")
+                joint_angles = self.compute_ik_with_current_seed(ee_position.tolist(), card_quat.tolist())
+                
+                if joint_angles is not None:
+                    # Update to use this alternative
+                    best_cardinal = card_name
+                    best_quat = card_quat
+                    resulting_object_R = card_object_R
+                    matched_target_R = card_target_R
+                    object_error = card_error
+                    self.get_logger().info(f"  ✅ IK succeeded with alternative: {card_name}")
+                    break
+        
+        if joint_angles is None:
+            self.get_logger().error("IK failed for all attempted cardinals")
+            return False
+        
+        # === Execute ===
+        trajectory = {"traj1": [{
+            "positions": [float(x) for x in joint_angles],
             "velocities": [0.0] * 6,
             "time_from_start": Duration(sec=int(duration))
-        }]
+        }]}
         
-        trajectory = {"traj1": trajectory_points}
-        # self.get_logger().info("Executing trajectory...")
-        success = self.execute_trajectory(trajectory)
-        
-        if success:
-            # Wait a moment for poses to update
-            time.sleep(0.5)
-            
-            # Log final state
-            # if object_name in self.current_poses and self.current_ee_pose is not None:
-            #     T_EE_final = self.pose_to_matrix(self.current_ee_pose.pose)
-            #     T_object_final = self.transform_to_matrix(self.current_poses[object_name].transform)
-            #     
-            #     ee_final_position, ee_final_rpy = self.matrix_to_rpy(T_EE_final)
-            #     object_final_position, object_final_rpy = self.matrix_to_rpy(T_object_final)
-            #     
-            #     self.get_logger().info("")
-            #     self.get_logger().info("=" * 80)
-            #     self.get_logger().info("FINAL STATE (after execution):")
-            #     self.get_logger().info(f"  Final EE: Position={ee_final_position} RPY={ee_final_rpy}")
-            #     self.get_logger().info(f"  Final Object: Position={object_final_position} RPY={object_final_rpy}")
-            #     self.get_logger().info("")
-            #     self.get_logger().info("COMPARISON:")
-            #     self.get_logger().info(f"  Object Position Change: {object_final_position - object_current_position}")
-            #     self.get_logger().info(f"  Object Orientation Change: {object_final_rpy - object_current_rpy}")
-            #     self.get_logger().info(f"  Target Object Orientation: {object_target_rpy}")
-            #     self.get_logger().info(f"  Final Object Orientation: {object_final_rpy}")
-            #     self.get_logger().info(f"  Orientation Error: {object_final_rpy - object_target_rpy}")
-            #     self.get_logger().info("=" * 80)
-        
-        return success
+        return self.execute_trajectory(trajectory)
     
     def execute_trajectory(self, trajectory):
-        """Execute trajectory using callbacks (like move_home.py)"""
         try:
-            if 'traj1' not in trajectory or not trajectory['traj1']:
-                return False
-            
             point = trajectory['traj1'][0]
-            positions = point['positions']
-            duration = point['time_from_start'].sec
             
             traj_msg = JointTrajectory()
             traj_msg.joint_names = self.joint_names
             
             traj_point = JointTrajectoryPoint()
-            traj_point.positions = positions
+            traj_point.positions = point['positions']
             traj_point.velocities = [0.0] * 6
-            traj_point.time_from_start = Duration(sec=duration)
+            traj_point.time_from_start = point['time_from_start']
             traj_msg.points.append(traj_point)
             
             goal = FollowJointTrajectory.Goal()
             goal.trajectory = traj_msg
             goal.goal_time_tolerance = Duration(sec=1)
             
-            # Reset completion flags
             self.trajectory_completed = False
             self.trajectory_success = False
             
-            # Send goal with callback
             self._send_goal_future = self.action_client.send_goal_async(goal)
             self._send_goal_future.add_done_callback(self.goal_response_callback)
-            # self.get_logger().info("Executing trajectory...")
             
-            # Wait for completion by spinning
             while rclpy.ok() and not self.trajectory_completed:
                 rclpy.spin_once(self, timeout_sec=0.1)
             
             return self.trajectory_success
         except Exception as e:
-            self.get_logger().error(f"Trajectory execution error: {e}")
-            self.trajectory_completed = True
+            self.get_logger().error(f"Trajectory error: {e}")
             return False
     
     def goal_response_callback(self, future):
-        """Handle goal response from action server"""
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().error("Trajectory goal rejected")
             self.trajectory_completed = True
             self.trajectory_success = False
             return
-        
-        # self.get_logger().info("Trajectory goal accepted, waiting for completion...")
         self._get_result_future = goal_handle.get_result_async()
         self._get_result_future.add_done_callback(self.goal_result_callback)
     
     def goal_result_callback(self, future):
-        """Handle goal result from action server"""
         result = future.result()
-        if result.status == 4:  # SUCCEEDED
-            # self.get_logger().info("Trajectory completed successfully")
-            self.trajectory_success = True
-        else:
-            self.get_logger().error(f"Trajectory failed with status: {result.status}")
-            self.trajectory_success = False
+        self.trajectory_success = (result.status == 4)
         self.trajectory_completed = True
 
 
 def main(args=None):
-    parser = argparse.ArgumentParser(description='Reorient for Assembly - ONLY changes orientation, keeps position')
-    parser.add_argument('--object-name', type=str, required=True, help='Name of the object to reorient')
-    parser.add_argument('--base-name', type=str, required=True, help='Name of the base object (for orientation reference)')
-    parser.add_argument('--duration', type=float, default=20.0, help='Movement duration in seconds')
+    parser = argparse.ArgumentParser(description='Reorient for Assembly (Fold Symmetry + 24-Cardinal with Intermediary)')
+    parser.add_argument('--object-name', type=str, required=True)
+    parser.add_argument('--base-name', type=str, required=True)
+    parser.add_argument('--duration', type=float, default=5.0)
+    parser.add_argument('--current-object-orientation', type=float, nargs=4, metavar=('X','Y','Z','W'),
+                       help='Current object orientation quaternion [x, y, z, w] (overrides topic)')
+    parser.add_argument('--target-base-orientation', type=float, nargs=4, metavar=('X','Y','Z','W'),
+                       help='Target base orientation quaternion [x, y, z, w] (overrides topic)')
+    parser.add_argument('--object-topic', type=str, default=DEFAULT_OBJECT_TOPIC)
+    parser.add_argument('--ee-topic', type=str, default=DEFAULT_EE_TOPIC)
+    
     args = parser.parse_args()
     
     rclpy.init()
-    node = ReorientForAssembly()
-    
-    # node.get_logger().info("Waiting for action server...")
+    node = ReorientForAssembly(args.object_topic, args.ee_topic)
     node.action_client.wait_for_server()
-    # node.get_logger().info("Action server available!")
     
     try:
-        # Wait for pose data (wait indefinitely until received)
-        # node.get_logger().info(f"Waiting for pose data for object: {args.object_name} and base: {args.base_name}")
-        # start_time = time.time()
-        # last_log_time = start_time
-        
-        while not node.current_poses or node.current_ee_pose is None:
+        while node.current_ee_pose is None:
             rclpy.spin_once(node, timeout_sec=0.1)
-            time.sleep(0.1)
-            
-            # Log every 5 seconds to show we're still waiting
-            # current_time = time.time()
-            # if current_time - last_log_time >= 5.0:
-            #     elapsed = current_time - start_time
-            #     node.get_logger().info(f"Still waiting for pose data... ({elapsed:.1f}s elapsed)")
-            #     last_log_time = current_time
         
-        # elapsed = time.time() - start_time
-        # node.get_logger().info(f"Received pose data for {len(node.current_poses)} objects (waited {elapsed:.1f}s)")
+        # Check if we need to wait for poses (only if not provided via arguments)
+        if args.current_object_orientation is None or args.target_base_orientation is None:
+            while not node.current_poses:
+                rclpy.spin_once(node, timeout_sec=0.1)
         
-        # Execute reorientation
         success = node.reorient_for_target(
-            args.object_name,
-            args.base_name,
-            duration=args.duration
+            args.object_name, args.base_name, args.duration,
+            args.current_object_orientation, args.target_base_orientation
         )
         
-        if success:
-            node.get_logger().info("Reorientation successful!")
-        else:
-            node.get_logger().error("Reorientation failed")
+        node.get_logger().info("✅ Success!" if success else "❌ Failed")
         
-        # Keep spinning briefly to allow any final callbacks/logging
         time.sleep(0.5)
-        
-        # Exit with appropriate code
         node.destroy_node()
         rclpy.shutdown()
         sys.exit(0 if success else 1)
-            
+        
     except KeyboardInterrupt:
-        node.get_logger().info("Interrupted by user")
-        node.destroy_node()
-        rclpy.shutdown()
-        sys.exit(1)
-    except Exception as e:
-        node.get_logger().error(f"Error: {e}")
         node.destroy_node()
         rclpy.shutdown()
         sys.exit(1)
@@ -686,4 +1152,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-

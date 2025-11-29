@@ -113,7 +113,8 @@ class GraspPointsPublisher(Node):
         )
         
         # Timer to publish grasp points periodically
-        self.publish_timer = self.create_timer(0.1, self.publish_grasp_points)  # 10 Hz
+        # Lower frequency to reduce race conditions
+        self.publish_timer = self.create_timer(0.2, self.publish_grasp_points)  # 5 Hz
         
         self.get_logger().info(f"🤖 Grasp Points Publisher started")
         self.get_logger().info(f"📥 Subscribing to: {self.objects_poses_topic}")
@@ -152,25 +153,25 @@ class GraspPointsPublisher(Node):
                 self.get_logger().error(f"Error loading {grasp_file}: {e}")
     
     def objects_poses_callback(self, msg: TFMessage):
-        """Handle incoming object poses from TFMessage"""
+        """Handle incoming object poses from TFMessage - update stored poses"""
+        # Clear all existing poses first
+        self.object_poses.clear()
+        
+        # If message is empty, we're done (poses already cleared)
+        if not msg.transforms:
+            return
+        
+        # Store poses for all objects in the message
         for transform in msg.transforms:
             object_name = transform.child_frame_id
-            
-            # Extract pose information
             trans = transform.transform.translation
             rot = transform.transform.rotation
-
-            # Store the pose
-            stored_quat = np.array([rot.x, rot.y, rot.z, rot.w])
+            
             self.object_poses[object_name] = {
                 'translation': np.array([trans.x, trans.y, trans.z]),
-                'quaternion': stored_quat,
+                'quaternion': np.array([rot.x, rot.y, rot.z, rot.w]),
                 'header': transform.header
             }
-            # Debug: Log when quaternion is stored
-            self.get_logger().debug(f"📥 Stored quaternion for {object_name}: "
-                                  f"q=[{stored_quat[0]:.6f}, {stored_quat[1]:.6f}, "
-                                  f"{stored_quat[2]:.6f}, {stored_quat[3]:.6f}]")
 
     def quaternion_to_rpy(self, x, y, z, w):
         """Convert quaternion to roll, pitch, yaw in degrees
@@ -236,57 +237,38 @@ class GraspPointsPublisher(Node):
 
     def publish_grasp_points(self):
         """Publish grasp points for all objects with known poses"""
-        if not self.object_poses or not self.grasp_data:
-            return
-        
-        # Create GraspPointArray message
+        # Create message (always publish, even if empty, to clear topic when no poses)
         grasp_array = GraspPointArray()
-        
-        # Use current time for header
         now = self.get_clock().now()
         grasp_array.header.stamp = now.to_msg()
         grasp_array.header.frame_id = "base"
         
-        # Process each object that has both pose and grasp data
+        # If no object poses, publish empty array to clear topic
+        if not self.object_poses or not self.grasp_data:
+            self.grasp_pub.publish(grasp_array)
+            return
+        
+        # Process each object with a pose
         for object_name_topic, object_pose in self.object_poses.items():
-            # Map topic object name to JSON object name
-            object_name_json = self.object_name_map.get(object_name_topic)
-            if object_name_json is None:
-                # Try direct match
-                if object_name_topic not in self.grasp_data:
-                    continue
-                object_name_json = object_name_topic
-            elif object_name_json not in self.grasp_data:
+            # Find matching grasp data
+            object_name_json = self.object_name_map.get(object_name_topic, object_name_topic)
+            if object_name_json not in self.grasp_data:
                 continue
             
-            grasp_data = self.grasp_data[object_name_json]
-            grasp_points_local = grasp_data.get('grasp_points', [])
+            # Get grasp points for this object
+            grasp_points_local = self.grasp_data[object_name_json].get('grasp_points', [])
             
-            # Transform each grasp point
+            # Transform and add each grasp point
             for gp_local in grasp_points_local:
                 try:
-                    # Transform grasp point to base frame
                     pos_base, quat_base = self.transform_grasp_point(gp_local, object_pose)
                     
-                    # Debug: Log quaternion comparison
-                    stored_quat = object_pose['quaternion']
-                    if not np.allclose(quat_base, stored_quat, atol=1e-6):
-                        self.get_logger().warn(f"⚠️ Quaternion mismatch for {object_name_topic} grasp_id {gp_local.get('id')}: "
-                                             f"stored={stored_quat}, published={quat_base}")
-                    
-                    # Create GraspPoint message
                     grasp_point = GraspPoint()
-                    
-                    # Header
                     grasp_point.header.stamp = now.to_msg()
                     grasp_point.header.frame_id = "base"
-                    
-                    # Object info - use topic name (without _scaled70) for consistency
                     grasp_point.object_name = object_name_topic
                     grasp_point.grasp_id = gp_local.get('id', 0)
                     grasp_point.grasp_type = gp_local.get('type', 'center_point')
-                    
-                    # Pose - position and orientation (quaternion) from object pose
                     grasp_point.pose.position.x = float(pos_base[0])
                     grasp_point.pose.position.y = float(pos_base[1])
                     grasp_point.pose.position.z = float(pos_base[2])
@@ -294,21 +276,16 @@ class GraspPointsPublisher(Node):
                     grasp_point.pose.orientation.y = float(quat_base[1])
                     grasp_point.pose.orientation.z = float(quat_base[2])
                     grasp_point.pose.orientation.w = float(quat_base[3])
-                    
-                    # Euler angles - always set to 0,0,0 (not used, quaternion is the source of truth)
                     grasp_point.roll = 0.0
                     grasp_point.pitch = 0.0
                     grasp_point.yaw = 0.0
                     
                     grasp_array.grasp_points.append(grasp_point)
-                    
                 except Exception as e:
                     self.get_logger().error(f"Error transforming grasp point {gp_local.get('id')} for {object_name_topic}: {e}")
         
-        # Publish if we have any grasp points
-        if len(grasp_array.grasp_points) > 0:
-            self.grasp_pub.publish(grasp_array)
-            self.get_logger().debug(f"Published {len(grasp_array.grasp_points)} grasp points")
+        # Always publish (even if empty array)
+        self.grasp_pub.publish(grasp_array)
 
 
 def main(args=None):
