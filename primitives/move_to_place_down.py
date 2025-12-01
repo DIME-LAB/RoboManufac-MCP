@@ -40,7 +40,7 @@ class MoveToClearSpace(Node):
         )
         
         # Target position for clear space (gripper center position, not TCP)
-        self.target_gripper_center_position = [-0.320, -0.5, 0.3]  # [x, y, z] - gripper center position
+        self.target_gripper_center_position = [-0.320, -0.5, 0.25]  # [x, y, z] - gripper center position
         # TCP to gripper center offset (24cm along gripper Z-axis, from TCP to gripper center)
         self.tcp_to_gripper_center_offset = 0.24  # 0.24m = 24cm
         
@@ -218,13 +218,14 @@ class MoveToClearSpace(Node):
         
         # Determine target orientation based on mode
         if self.mode == 'hover':
-            # Hover mode: Change to top-down (face-down) orientation
-            # Standard top-down: roll=0°, pitch=180°, yaw=0°
-            target_rotation = Rot.from_euler('xyz', [0, 180, 0], degrees=True)
-            target_quat = target_rotation.as_quat()
+            # Hover mode: Use specific quaternion orientation (0, 1, 0, 0)
+            # Change to top-down (face-down) orientation
+            target_quat = np.array([0.0, 1.0, 0.0, 0.0])  # [x, y, z, w] format
+            target_rotation = Rot.from_quat(target_quat)
             target_rot_matrix = target_rotation.as_matrix()
             
-            self.get_logger().info(f"Hover mode: Setting orientation to face-down (top-down) - roll=0°, pitch=180°, yaw=0°")
+            target_rpy_from_quat = target_rotation.as_euler('xyz', degrees=True)
+            self.get_logger().info(f"Hover mode: Setting orientation to quaternion [0, 1, 0, 0] (RPY: [{target_rpy_from_quat[0]:.1f}, {target_rpy_from_quat[1]:.1f}, {target_rpy_from_quat[2]:.1f}]°)")
         else:
             # Move mode: Keep the current orientation (don't change it, just move to target position)
             target_rotation = Rot.from_quat(current_quat)
@@ -246,7 +247,7 @@ class MoveToClearSpace(Node):
         
         if self.mode == 'hover':
             target_rpy = target_rotation.as_euler('xyz', degrees=True)
-            self.get_logger().info(f"Target orientation: face-down (RPY: [{target_rpy[0]:.1f}, {target_rpy[1]:.1f}, {target_rpy[2]:.1f}]°)")
+            self.get_logger().info(f"Target orientation: quaternion [0, 1, 0, 0] (RPY: [{target_rpy[0]:.1f}, {target_rpy[1]:.1f}, {target_rpy[2]:.1f}]°)")
         else:
             self.get_logger().info(f"Target orientation: keeping current quaternion (no RPY conversion)")
         
