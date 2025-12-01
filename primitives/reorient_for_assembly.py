@@ -1001,6 +1001,48 @@ class ReorientForAssembly(Node):
         self.get_logger().info(f"    EE Position: {ee_position} (unchanged)")
         self.get_logger().info("=" * 70)
         
+        # === Redirect EE orientation if facing towards robot base ===
+        # Check if EE RPY is approximately (90, 0, 180) and redirect to (90, 0, 0)
+        # This prevents the EE from facing towards the robot base
+        rpy_tolerance = 5.0  # degrees tolerance
+        if (abs(EE_rpy[0] - 90.0) < rpy_tolerance and 
+            abs(EE_rpy[1] - 0.0) < rpy_tolerance and 
+            abs(EE_rpy[2] - 180.0) < rpy_tolerance):
+            self.get_logger().info(f"  🔄 Redirecting EE from (90, 0, 180) to (90, 0, 0) to avoid facing robot base")
+            # Create new quaternion from (90, 0, 0) RPY
+            R_EE_redirected = R.from_euler('xyz', [90.0, 0.0, 0.0], degrees=True)
+            best_quat = R_EE_redirected.as_quat()
+            
+            # Recalculate resulting object orientation with redirected EE
+            R_EE_redirected_matrix = R_EE_redirected.as_matrix()
+            resulting_object_R = R_EE_redirected_matrix @ R_grasp
+            
+            # Find closest equivalent target to verify alignment is still good
+            equivalent_targets = FoldSymmetry.generate_equivalent_target_orientations(
+                R_object_target_world, fold_data, None
+            )
+            object_error_redirected = float('inf')
+            best_target_R_redirected = None
+            for R_target_equiv in equivalent_targets:
+                error = ExtendedCardinalOrientations.rotation_matrix_distance(
+                    resulting_object_R, R_target_equiv
+                )
+                if error < object_error_redirected:
+                    object_error_redirected = error
+                    best_target_R_redirected = R_target_equiv
+            
+            # Update matched target and error
+            matched_target_R = best_target_R_redirected
+            object_error = object_error_redirected
+            
+            # Recalculate RPY for logging
+            EE_rpy = [90.0, 0.0, 0.0]
+            resulting_rpy = R.from_matrix(resulting_object_R).as_euler('xyz', degrees=True)
+            matched_rpy = R.from_matrix(matched_target_R).as_euler('xyz', degrees=True)
+            
+            self.get_logger().info(f"  ✅ Redirected EE RPY: [{EE_rpy[0]:.1f}, {EE_rpy[1]:.1f}, {EE_rpy[2]:.1f}]")
+            self.get_logger().info(f"  ✅ Updated object alignment error: {object_error:.1f}°")
+        
         # === Check if error is acceptable ===
         if object_error > 30.0:
             self.get_logger().warn(f"⚠️ High alignment error ({object_error:.1f}°) - result may not be ideal")
