@@ -54,11 +54,9 @@ except ImportError:
 GRIPPER_FORCE_THRESHOLD = 100.0  # Stop when gripper force exceeds this value (for sim mode)
 
 # Real mode force thresholds:
-# Use DELTA-based detection for ALL axes to avoid false positives from baseline offsets
-# Contact is detected when force CHANGES significantly from baseline, not absolute values
-FORCE_THRESHOLD_X_DELTA = 15.0  # Stop when X force changes by this amount from baseline
-FORCE_THRESHOLD_Y_DELTA = 15.0  # Stop when Y force changes by this amount from baseline
-FORCE_THRESHOLD_Z_DELTA = 20.0  # Stop when Z force changes by this amount from baseline
+# Use DELTA-based detection - stop when force/torque changes by threshold from baseline
+# Monitors all 6 axes: Fx, Fy, Fz, Tx, Ty, Tz
+FORCE_THRESHOLD = 20.0  # Stop when force/torque changes by this amount from baseline (Newtons)
 
 MOVEMENT_DURATION = 10.0  # Duration for smooth movement in seconds
 FORCE_CHECK_INTERVAL = 0.02  # Check force every 20ms during movement
@@ -92,14 +90,23 @@ class MoveDown(Node):
             # Sim mode: gripper force (single value)
             self.current_gripper_force = 0.0
         else:
-            # Real mode: force readings for all three axes
+            # Real mode: force readings for all axes (forces and torques)
             self.current_force_x = 0.0
             self.current_force_y = 0.0
             self.current_force_z = 0.0
-            # Track baseline forces for ALL axes (captured at start of movement)
-            self.baseline_force_x = None
-            self.baseline_force_y = None
-            self.baseline_force_z = None
+            self.current_torque_x = 0.0
+            self.current_torque_y = 0.0
+            self.current_torque_z = 0.0
+            # Store initial force values (baseline) - these will be zeroed when monitoring starts
+            self.initial_force_x = None
+            self.initial_force_y = None
+            self.initial_force_z = None
+            self.initial_torque_x = None
+            self.initial_torque_y = None
+            self.initial_torque_z = None
+            # Grace period after movement starts before checking forces (avoid false positives from movement initiation)
+            self.movement_start_time = None
+            self.force_check_grace_period = 0.5  # Wait 0.5 seconds after movement starts
         self.force_threshold_reached = False
         
         # Current goal handle for cancellation
@@ -288,39 +295,49 @@ class MoveDown(Node):
             self.emergency_stop()
     
     def force_callback(self, msg: WrenchStamped):
-        """Callback for force/torque sensor data - monitors all three axes (real mode)
+        """Callback for force/torque sensor data - monitors all axes (real mode)
         
-        Uses DELTA-based detection: compares current force to baseline captured at movement start.
-        This avoids false positives from sensor offsets or gravity compensation.
+        Uses ABSOLUTE force detection: stops when any force/torque magnitude exceeds threshold.
+        Handles both positive and negative forces (absolute value comparison).
         """
-        # Extract force components for all three axes
+        # Extract force and torque components for all axes
         self.current_force_x = msg.wrench.force.x
         self.current_force_y = msg.wrench.force.y
         self.current_force_z = msg.wrench.force.z
-        
-        # Capture baseline forces at start (before movement begins)
-        if not self.moving and self.baseline_force_x is None:
-            self.baseline_force_x = self.current_force_x
-            self.baseline_force_y = self.current_force_y
-            self.baseline_force_z = self.current_force_z
-            self.get_logger().info(
-                f"Captured baseline forces: X={self.baseline_force_x:.2f}N, "
-                f"Y={self.baseline_force_y:.2f}N, Z={self.baseline_force_z:.2f}N"
-            )
+        self.current_torque_x = msg.wrench.torque.x
+        self.current_torque_y = msg.wrench.torque.y
+        self.current_torque_z = msg.wrench.torque.z
 
     def start_force_monitoring(self):
         """Start monitoring force during trajectory execution"""
-        # Capture current forces as baseline before starting movement
+        import time
         if self.mode == 'real':
-            if self.baseline_force_x is None:
-                self.baseline_force_x = self.current_force_x
-            if self.baseline_force_y is None:
-                self.baseline_force_y = self.current_force_y
-            if self.baseline_force_z is None:
-                self.baseline_force_z = self.current_force_z
+            # Store initial force values as baseline (zero the sensor)
+            # Wait a moment to get current readings
+            time.sleep(0.1)  # Brief wait to ensure we have current readings
+            
+            self.initial_force_x = self.current_force_x
+            self.initial_force_y = self.current_force_y
+            self.initial_force_z = self.current_force_z
+            self.initial_torque_x = self.current_torque_x
+            self.initial_torque_y = self.current_torque_y
+            self.initial_torque_z = self.current_torque_z
+            
+            # Record movement start time for grace period
+            self.movement_start_time = time.time()
+            
+            # Log initial force values (baseline)
+            self.get_logger().info("="*70)
+            self.get_logger().info("Initial Force Parameters (Baseline - Zeroed):")
+            self.get_logger().info(f"  Fx: {self.initial_force_x:.2f}N")
+            self.get_logger().info(f"  Fy: {self.initial_force_y:.2f}N")
+            self.get_logger().info(f"  Fz: {self.initial_force_z:.2f}N")
+            self.get_logger().info(f"  Tx: {self.initial_torque_x:.2f}N·m")
+            self.get_logger().info(f"  Ty: {self.initial_torque_y:.2f}N·m")
+            self.get_logger().info(f"  Tz: {self.initial_torque_z:.2f}N·m")
+            self.get_logger().info("="*70)
             self.get_logger().info(
-                f"Baseline forces at movement start: X={self.baseline_force_x:.2f}N, "
-                f"Y={self.baseline_force_y:.2f}N, Z={self.baseline_force_z:.2f}N"
+                f"Force monitoring started - threshold: Δ{FORCE_THRESHOLD}N change from baseline for any axis"
             )
         
         if self.force_monitor_timer is None:
@@ -330,8 +347,10 @@ class MoveDown(Node):
             else:
                 self.get_logger().info(f"Started force monitoring during execution (delta-based)")
                 self.get_logger().info(
-                    f"  Thresholds: |ΔX| > {FORCE_THRESHOLD_X_DELTA}N, "
-                    f"|ΔY| > {FORCE_THRESHOLD_Y_DELTA}N, |ΔZ| > {FORCE_THRESHOLD_Z_DELTA}N"
+                    f"  Monitoring: Fx, Fy, Fz, Tx, Ty, Tz"
+                )
+                self.get_logger().info(
+                    f"  Threshold: |Δforce| > {FORCE_THRESHOLD}N change from baseline for any axis"
                 )
 
     def stop_force_monitoring(self):
@@ -360,6 +379,13 @@ class MoveDown(Node):
         if not self.moving:
             return
         
+        # Grace period: don't check forces immediately after movement starts (avoid false positives from movement initiation)
+        if self.mode == 'real' and self.movement_start_time is not None:
+            import time
+            elapsed_since_start = time.time() - self.movement_start_time
+            if elapsed_since_start < self.force_check_grace_period:
+                return  # Skip force check during grace period
+        
         if self.mode == 'sim':
             # Sim mode: check gripper force
             if self.current_gripper_force > GRIPPER_FORCE_THRESHOLD:
@@ -371,48 +397,45 @@ class MoveDown(Node):
                 self.get_logger().debug(f"Force monitoring: Gripper force = {self.current_gripper_force:.2f} (threshold: {GRIPPER_FORCE_THRESHOLD})")
         else:
             # Real mode: check forces using DELTA-based detection for ALL axes
-            # This compares current force to baseline captured at movement start
-            # Contact is detected when force CHANGES significantly, not based on absolute value
+            # Monitors all 6 axes: Fx, Fy, Fz, Tx, Ty, Tz
+            # Only triggers if force CHANGES by more than threshold from initial baseline
+            # This handles cases where initial forces are non-zero (e.g., Fy = 12.03N)
             
-            # Calculate deltas from baseline
-            baseline_x = self.baseline_force_x if self.baseline_force_x is not None else 0.0
-            baseline_y = self.baseline_force_y if self.baseline_force_y is not None else 0.0
-            baseline_z = self.baseline_force_z if self.baseline_force_z is not None else 0.0
+            # Check if we have initial values set
+            if (self.initial_force_x is None or 
+                self.initial_force_y is None or 
+                self.initial_force_z is None):
+                return  # Wait for initial values to be set
             
-            force_x_delta = abs(self.current_force_x - baseline_x)
-            force_y_delta = abs(self.current_force_y - baseline_y)
-            force_z_delta = abs(self.current_force_z - baseline_z)
+            # Calculate deltas from initial baseline values
+            delta_fx = abs(self.current_force_x - self.initial_force_x)
+            delta_fy = abs(self.current_force_y - self.initial_force_y)
+            delta_fz = abs(self.current_force_z - self.initial_force_z)
+            delta_tx = abs(self.current_torque_x - self.initial_torque_x)
+            delta_ty = abs(self.current_torque_y - self.initial_torque_y)
+            delta_tz = abs(self.current_torque_z - self.initial_torque_z)
             
-            if force_x_delta >= FORCE_THRESHOLD_X_DELTA:
-                self.get_logger().error(
-                    f"EMERGENCY STOP: X force delta exceeded threshold! "
-                    f"ΔX={force_x_delta:.2f}N (current: {self.current_force_x:.2f}N, "
-                    f"baseline: {baseline_x:.2f}N, threshold: {FORCE_THRESHOLD_X_DELTA}N)"
-                )
-                self.force_threshold_reached = True
-                self.emergency_stop()
-            elif force_y_delta >= FORCE_THRESHOLD_Y_DELTA:
-                self.get_logger().error(
-                    f"EMERGENCY STOP: Y force delta exceeded threshold! "
-                    f"ΔY={force_y_delta:.2f}N (current: {self.current_force_y:.2f}N, "
-                    f"baseline: {baseline_y:.2f}N, threshold: {FORCE_THRESHOLD_Y_DELTA}N)"
-                )
-                self.force_threshold_reached = True
-                self.emergency_stop()
-            elif force_z_delta >= FORCE_THRESHOLD_Z_DELTA:
-                self.get_logger().error(
-                    f"EMERGENCY STOP: Z force delta exceeded threshold! "
-                    f"ΔZ={force_z_delta:.2f}N (current: {self.current_force_z:.2f}N, "
-                    f"baseline: {baseline_z:.2f}N, threshold: {FORCE_THRESHOLD_Z_DELTA}N)"
-                )
-                self.force_threshold_reached = True
-                self.emergency_stop()
-            else:
-                # Debug: log force deltas during movement
-                self.get_logger().debug(
-                    f"Force monitoring: ΔX={force_x_delta:.2f}N, ΔY={force_y_delta:.2f}N, "
-                    f"ΔZ={force_z_delta:.2f}N"
-                )
+            # Check all axes for threshold exceedance
+            axes = [
+                (delta_fx, "Fx", self.current_force_x, self.initial_force_x),
+                (delta_fy, "Fy", self.current_force_y, self.initial_force_y),
+                (delta_fz, "Fz", self.current_force_z, self.initial_force_z),
+                (delta_tx, "Tx", self.current_torque_x, self.initial_torque_x),
+                (delta_ty, "Ty", self.current_torque_y, self.initial_torque_y),
+                (delta_tz, "Tz", self.current_torque_z, self.initial_torque_z),
+            ]
+            
+            # Check each axis
+            for delta, axis_name, current_value, initial_value in axes:
+                if delta > FORCE_THRESHOLD:
+                    self.get_logger().error(
+                        f"EMERGENCY STOP: {axis_name} force/torque delta exceeded threshold! "
+                        f"Δ{axis_name}={delta:.2f}N (current: {current_value:.2f}N, "
+                        f"initial: {initial_value:.2f}N, threshold: {FORCE_THRESHOLD}N)"
+                    )
+                    self.force_threshold_reached = True
+                    self.emergency_stop()
+                    return  # Exit immediately after emergency stop
 
     def emergency_stop(self):
         """Emergency stop - cancel current trajectory and stop immediately, then exit"""
@@ -560,8 +583,7 @@ class MoveDown(Node):
             self.get_logger().info(f"Gripper force threshold: {GRIPPER_FORCE_THRESHOLD}")
         else:
             self.get_logger().info(
-                f"Force thresholds (delta-based): |ΔX| > {FORCE_THRESHOLD_X_DELTA}N, "
-                f"|ΔY| > {FORCE_THRESHOLD_Y_DELTA}N, |ΔZ| > {FORCE_THRESHOLD_Z_DELTA}N"
+                f"Force threshold (delta-based): |Δforce| > {FORCE_THRESHOLD}N change from baseline for any axis (Fx, Fy, Fz, Tx, Ty, Tz)"
             )
 
         # Compute inverse kinematics
