@@ -151,10 +151,11 @@ class MoveDown(Node):
             )
             self.get_logger().info(f"Using mode: {self.mode}, force/torque topic: /force_torque_sensor_broadcaster/wrench")
         
-        # Subscriber for EE pose data (using same QoS as get_ee_pose.py)
+        # Subscriber for EE pose data
+        # Use VOLATILE durability (default for most publishers) to avoid QoS incompatibility warnings
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            durability=DurabilityPolicy.VOLATILE,  # Changed from TRANSIENT_LOCAL to match most publishers
             depth=10
         )
         

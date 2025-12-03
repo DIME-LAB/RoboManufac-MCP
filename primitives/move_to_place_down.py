@@ -53,10 +53,11 @@ class MoveToClearSpace(Node):
         self.current_joint_angles = None
         self.joint_angles_received = False
         
-        # Subscriber for EE pose data (using same QoS as move_to_safe_height)
+        # Subscriber for EE pose data
+        # Use VOLATILE durability (default for most publishers) to avoid QoS incompatibility warnings
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            durability=DurabilityPolicy.VOLATILE,  # Changed from TRANSIENT_LOCAL to match most publishers
             depth=10
         )
         

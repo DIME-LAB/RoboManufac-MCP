@@ -262,9 +262,10 @@ class DirectObjectMove(Node):
             self.get_logger().info(f"Using REAL mode: subscribed to {self.topic_name} (TFMessage)")
         
         # Subscribe to end-effector pose topic
+
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            durability=DurabilityPolicy.VOLATILE, 
             depth=10
         )
         self.ee_pose_sub = self.create_subscription(
