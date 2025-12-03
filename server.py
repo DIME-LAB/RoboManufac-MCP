@@ -2,6 +2,8 @@ from mcp.server.fastmcp import FastMCP, Image
 from typing import List, Any, Optional, Union
 from pathlib import Path
 import json
+import yaml
+from box import Box
 import base64
 from utils.websocket_manager import WebSocketManager
 from msgs.geometry_msgs import Twist, PoseStamped
@@ -28,14 +30,32 @@ from scipy.spatial.transform import Rotation as R
 import traceback
 import re
 
-LOCAL_IP = "192.168.56.1"  # Replace with your local IP address
-ROSBRIDGE_IP = "localhost"  # Replace with your rosbridge server IP address
-ROSBRIDGE_PORT = 9090
 
+# Configs containing paths of ROS and other related filepaths
+with open("SERVER_CFGS.yaml", "r") as f:
+    yaml_cfg = Box(yaml.safe_load(f))
+
+
+# Set Up WebSocket Manager for ROSBRIDGE
+LOCAL_IP = yaml_cfg.rosbridge.local_ip  # Replace with your local IP address
+ROSBRIDGE_IP = yaml_cfg.rosbridge.rosbridge_ip  # Replace with your rosbridge server IP address
+ROSBRIDGE_PORT = yaml_cfg.rosbridge.rosbridge_port
+
+# This is Global WebSocket manager - don't close it after every operation
+ws_manager = WebSocketManager(ROSBRIDGE_IP, ROSBRIDGE_PORT, LOCAL_IP)
+
+# ROS Paths from YAML Config
+ROS_SRC = yaml_cfg.ros_paths.ros_src_path
+WS_SRC = yaml_cfg.ros_paths.ws_src_path
+CUSTOM_LIBS_PATH = yaml_cfg.ros_paths.custom_lib_path
+PRIMITIVE_LIBS_PATH = yaml_cfg.ros_paths.primitive_libs_path
+
+
+# MCP Directory
+MCP_SRV_DIR = yaml_cfg.mcp_wrkdir
+# Initialize MCP 
 mcp = FastMCP("ros-mcp-server")
 
-# Global WebSocket manager - don't close it after every operation
-ws_manager = WebSocketManager(ROSBRIDGE_IP, ROSBRIDGE_PORT, LOCAL_IP)
 
 @mcp.tool()
 def get_topics():
@@ -340,7 +360,7 @@ def read_topic(topic_name: str, timeout: int = 5):
     
     try:
         # Source ROS2 and run the command in bash
-        cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && timeout {timeout} ros2 topic echo {topic_name} --once"
+        cmd = f"source {ROS_SRC} && source {WS_SRC} && timeout {timeout} ros2 topic echo {topic_name} --once"
         
         process_result = subprocess.run(
             cmd,
@@ -389,7 +409,7 @@ def read_topic(topic_name: str, timeout: int = 5):
 @mcp.tool()
 def perform_ik(target_position: List[float], target_rpy: List[float], 
                duration: float = 5.0, 
-               custom_lib_path: str = "/home/aaugus11/Documents/ros-mcp-server/primitives") -> Dict[str, Any]:
+               custom_lib_path: str = f"{MCP_SRV_DIR}/primitives") -> Dict[str, Any]:
     """
     Perform inverse kinematics and execute smooth trajectory movement using ROS2.
     
@@ -521,8 +541,8 @@ def execute_joint_trajectory(joint_angles: List[float], duration: float = 5.0) -
         timeout_seconds = int(duration) + 5
         # Use timeout command wrapper like move_home does, and structure command similarly
         cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash",
+            f"source {ROS_SRC}",
+            f"source {WS_SRC}",
             "export ROS_DOMAIN_ID=0",
             f"timeout {timeout_seconds} ros2 action send_goal /scaled_joint_trajectory_controller/follow_joint_trajectory control_msgs/action/FollowJointTrajectory '{action_goal}'"
         ]
@@ -635,7 +655,7 @@ def execute_joint_trajectory(joint_angles: List[float], duration: float = 5.0) -
 
 @mcp.tool()
 def get_ee_pose(joint_angles: List[float] = None,
-                custom_lib_path: str = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries") -> Dict[str, Any]:
+                custom_lib_path: str = f"{CUSTOM_LIBS_PATH}") -> Dict[str, Any]:
     """
     Get end-effector pose using forward kinematics from specified or current joint angles.
     Perform ros2 topic echo --once /joint_states to get current joint angles.
@@ -768,8 +788,8 @@ def verify_grasp(timeout: int = 5) -> Dict[str, Any]:
         FULLY_CLOSED_WIDTH = 9.0
         
         # Run the verify_grasp.py script
-        script_path = "/home/aaugus11/Documents/ros-mcp-server/primitives/verify_grasp.py"
-        cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && python {script_path} {timeout}"
+        script_path = f"{MCP_SRV_DIR}/primitives/verify_grasp.py"
+        cmd = f"source {ROS_SRC} && source {WS_SRC} && python {script_path} {timeout}"
         
         result = subprocess.run(
             cmd,
@@ -879,7 +899,7 @@ def execute_python_code(code: str, timeout: int = 30) -> Dict[str, Any]:
 import sys
 import os
 import traceback
-sys.path.append('/home/aaugus11/Documents/ros-mcp-server')
+sys.path.append('{MCP_SRV_DIR}')
 
 # Set up ROS2 environment
 os.environ['ROS_DOMAIN_ID'] = '0'
@@ -891,10 +911,10 @@ def run_ros2_command(cmd_list, **kwargs):
     \"\"\"Run ROS2 commands with proper environment sourcing\"\"\"
     import subprocess
     if isinstance(cmd_list, str):
-        cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && source ~/ros2/install/setup.bash && {{cmd_list}}"
+        cmd = f"source {ROS_SRC} && source {WS_SRC} && source ~/ros2/install/setup.bash && {{cmd_list}}"
         return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
     else:
-        cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && source ~/ros2/install/setup.bash && {{' '.join(cmd_list)}}"
+        cmd = f"source {ROS_SRC} && source {WS_SRC} && source ~/ros2/install/setup.bash && {{' '.join(cmd_list)}}"
         return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
 
 # Import all the existing functions Claude can use (dynamically discovered)
@@ -926,7 +946,7 @@ import re
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd='/home/aaugus11/Documents/ros-mcp-server'
+            cwd='{MCP_SRV_DIR}'
         )
         
         # Clean up
@@ -992,10 +1012,10 @@ def execute_code_with_server_access(code: str, timeout: int = 30) -> Dict[str, A
             """Run ROS2 commands with proper environment sourcing"""
             import subprocess
             if isinstance(cmd_list, str):
-                cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && {cmd_list}"
+                cmd = f"source {ROS_SRC} && source {WS_SRC} && {cmd_list}"
                 return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
             else:
-                cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && {' '.join(cmd_list)}"
+                cmd = f"source {ROS_SRC} && source {WS_SRC} && {' '.join(cmd_list)}"
                 return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
         
         # Create execution context with access to server internals
@@ -1100,10 +1120,10 @@ def start_background_task(code: str, task_name: str = "background_task") -> Dict
             """Run ROS2 commands with proper environment sourcing"""
             import subprocess
             if isinstance(cmd_list, str):
-                cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && {cmd_list}"
+                cmd = f"source {ROS_SRC} && source {WS_SRC} && {cmd_list}"
                 return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
             else:
-                cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && {' '.join(cmd_list)}"
+                cmd = f"source {ROS_SRC} && source {WS_SRC} && {' '.join(cmd_list)}"
                 return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
         
         # Create execution context similar to execute_code_with_server_access
@@ -1394,7 +1414,7 @@ def fast_topic_read(topic_name: str, timeout: int = 2):
         import re
         
         # Use properly sourced environment
-        cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && source ~/ros2/install/setup.bash && timeout {timeout} ros2 topic echo {topic_name} --once"
+        cmd = f"source {ROS_SRC} && source {WS_SRC} && source ~/ros2/install/setup.bash && timeout {timeout} ros2 topic echo {topic_name} --once"
         
         result = subprocess.run(
             cmd,
@@ -1707,10 +1727,10 @@ else:
         def run_ros2_command(cmd_list, **kwargs):
             import subprocess
             if isinstance(cmd_list, str):
-                cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && {cmd_list}"
+                cmd = f"source {ROS_SRC} && source {WS_SRC} && {cmd_list}"
                 return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
             else:
-                cmd = f"source /opt/ros/humble/setup.bash && source ~/Desktop/ros2_ws/install/setup.bash && {' '.join(cmd_list)}"
+                cmd = f"source {ROS_SRC} && source {WS_SRC} && {' '.join(cmd_list)}"
                 return subprocess.run(cmd, shell=True, executable='/bin/bash', **kwargs)
         
         # Create execution context
@@ -1756,7 +1776,7 @@ def run_primitive_script(script_name: str, timeout: int = 30):
         import os
         
         # Path to primitive scripts
-        primitives_dir = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/scripts/primitives"
+        primitives_dir = f"{PRIMITIVE_LIBS_PATH}"
         script_path = os.path.join(primitives_dir, script_name)
         
         # Check if script exists
@@ -1769,8 +1789,8 @@ def run_primitive_script(script_name: str, timeout: int = 30):
         
         # Source ROS2 environment and run script
         cmd = f"""
-source /opt/ros/humble/setup.bash
-source ~/Desktop/ros2_ws/install/setup.bash
+source {ROS_SRC}
+source {WS_SRC}
 source ~/ros2/install/setup.bash
 export ROS_DOMAIN_ID=0
 cd {primitives_dir}
@@ -1830,7 +1850,7 @@ def list_primitive_scripts():
     try:
         import os
         
-        primitives_dir = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/scripts/primitives"
+        primitives_dir = f"{PRIMITIVE_LIBS_PATH}"
         
         if not os.path.exists(primitives_dir):
             return {
@@ -1874,7 +1894,7 @@ def visual_servo_pick(topic_name: str = "/object_poses/jenga_4", hover_height: f
         import time
         
         # Path to the visual_servo.py script
-        script_path = "/home/aaugus11/Documents/ros-mcp-server/primitives/visual_servo.py"
+        script_path = f"{MCP_SRV_DIR}/primitives/visual_servo.py"
         
         # Check if script exists
         if not os.path.exists(script_path):
@@ -1885,10 +1905,10 @@ def visual_servo_pick(topic_name: str = "/object_poses/jenga_4", hover_height: f
         
         # Source ROS2 environment and run script with timeout
         cmd = f"""
-source /opt/ros/humble/setup.bash
-source ~/Desktop/ros2_ws/install/setup.bash
+source {ROS_SRC}
+source {WS_SRC}
 export ROS_DOMAIN_ID=0
-cd /home/aaugus11/Documents/ros-mcp-server/primitives
+cd {MCP_SRV_DIR}/primitives
 timeout {duration + 5} /usr/bin/python3 visual_servo.py --topic {topic_name} --height {hover_height} --duration {duration}
 """
         
@@ -1972,7 +1992,7 @@ def visual_servo_yoloe(topic_name: str = "/objects_poses", object_name: str = "b
         import os
         
         # Path to the visual_servo_yoloe.py script
-        script_path = "/home/aaugus11/Documents/ros-mcp-server/primitives/visual_servo_yoloe.py"
+        script_path = f"{MCP_SRV_DIR}/primitives/visual_servo_yoloe.py"
         
         # Check if script exists
         if not os.path.exists(script_path):
@@ -1992,10 +2012,10 @@ def visual_servo_yoloe(topic_name: str = "/objects_poses", object_name: str = "b
         
         # Build command with optional parameters
         cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash",
+            f"source {ROS_SRC}",
+            f"source {WS_SRC}",
             "export ROS_DOMAIN_ID=0",
-            "cd /home/aaugus11/Documents/ros-mcp-server/primitives",
+            f"cd {MCP_SRV_DIR}/primitives",
             f"timeout {duration + 5} /usr/bin/python3 visual_servo_yoloe.py --topic {topic_name} --object-name \"{object_name}\" --height {hover_height} --duration {duration} --movement-duration {movement_duration}"
         ]
         
@@ -2098,8 +2118,8 @@ def run_prompt_free_detection():
         from datetime import datetime
         
         # Path to the prompt free test script
-        script_path = "/home/aaugus11/Documents/ros-mcp-server/yoloe/prompt_free_test.py"
-        screenshots_dir = "/home/aaugus11/Documents/ros-mcp-server/yoloe/screenshots"
+        script_path = f"{MCP_SRV_DIR}/yoloe/prompt_free_test.py"
+        screenshots_dir = f"{MCP_SRV_DIR}/yoloe/screenshots"
         
         # Check if script exists
         if not os.path.exists(script_path):
@@ -2111,10 +2131,10 @@ def run_prompt_free_detection():
         # Run the script with proper environment setup
         cmd = [
             "bash", "-c",
-            "source /opt/ros/humble/setup.bash && "
-            "source ~/Desktop/ros2_ws/install/setup.bash && "
+            f"source {ROS_SRC} && "
+            f"source {WS_SRC} && "
             "export ROS_DOMAIN_ID=0 && "
-            f"cd /home/aaugus11/Documents/ros-mcp-server/yoloe && "
+            f"cd {MCP_SRV_DIR}/yoloe && "
             "python3 prompt_free_test.py"
         ]
         
@@ -2265,7 +2285,7 @@ def update_yolo_prompts(color_map: dict):
         prompts = list(color_map.keys())
         
         # Path to the update service script
-        script_path = "/home/aaugus11/Documents/ros-mcp-server/yoloe/update_yolo_prompts_service.py"
+        script_path = f"{MCP_SRV_DIR}/yoloe/update_yolo_prompts_service.py"
         
         # Check if script exists
         if not os.path.exists(script_path):
@@ -2277,10 +2297,10 @@ def update_yolo_prompts(color_map: dict):
         # Build the command arguments
         cmd_parts = [
             "bash", "-c",
-            "source /opt/ros/humble/setup.bash && "
-            "source ~/Desktop/ros2_ws/install/setup.bash && "
+            f"source {ROS_SRC} && "
+            f"source {WS_SRC} && "
             "export ROS_DOMAIN_ID=0 && "
-            f"cd /home/aaugus11/Documents/ros-mcp-server/yoloe && "
+            f"cd {MCP_SRV_DIR}/yoloe && "
             f"python3 update_yolo_prompts_service.py"
         ]
         
@@ -2387,8 +2407,8 @@ def push_primitive(initial_x: float, initial_y: float, initial_z: float, initial
         # Execute the push simulation with ROS2 environment (same pattern as visual_servo_yoloe)
         # Build command with environment sourcing
         cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash", 
+            "source {ROS_SRC}",
+            "source {WS_SRC}", 
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
             f"timeout 60 /usr/bin/python3 push_sim.py --initial-x {initial_x} --initial-y {initial_y} --initial-z {initial_z} --initial-yaw {initial_yaw} --final-x {final_x} --final-y {final_y} --final-z {final_z} --final-yaw {final_yaw} --ee-height {ee_height} --initial-offset {initial_offset} --final-offset {final_offset} --stage-duration {stage_duration}"
@@ -2481,8 +2501,8 @@ def push_real(object_name: str = "jenga_4", final_x: float = 0.0, final_y: float
         
         # Build command with environment sourcing (same pattern as visual_servo_yoloe)
         cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash", 
+            f"source {ROS_SRC}",
+            f"source {WS_SRC}", 
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
             f"timeout 60 /usr/bin/python3 push_real.py --object-name \"{object_name}\" --final-x {final_x} --final-y {final_y} --final-z {final_z} --final-yaw {final_yaw} --ee-height {ee_height} --initial-offset {initial_offset} --final-offset {final_offset} --stage-duration {stage_duration}"
@@ -2551,8 +2571,8 @@ def move_home() -> Dict[str, Any]:
         move_home_path = os.path.join(script_dir, "primitives", "move_home.py")
         
         cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash",
+            f"source {ROS_SRC}",
+            f"source {WS_SRC}",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
             f"timeout 45 /usr/bin/python3 move_home.py"
@@ -2623,8 +2643,8 @@ def move_to_grasp(object_name: str, grasp_id: int, mode: str = "sim") -> Dict[st
             }
         
         cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash",
+            f"source {ROS_SRC}",
+            f"source {WS_SRC}",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
             f"timeout 60 /usr/bin/python3 move_to_grasp.py --object-name \"{object_name}\" --grasp-id {grasp_id} --mode {mode}"
@@ -2683,8 +2703,8 @@ def reorient_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
         reorient_path = os.path.join(script_dir, "primitives", "reorient_for_assembly.py")
         
         cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash",
+            f"source {ROS_SRC}",
+            f"source {WS_SRC}",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
             f"timeout 90 /usr/bin/python3 reorient_for_assembly.py --object-name \"{object_name}\" --base-name \"{base_name}\""
@@ -2750,8 +2770,8 @@ def translate_for_assembly(object_name: str, base_name: str) -> Dict[str, Any]:
         translate_path = os.path.join(script_dir, "primitives", "translate_for_assembly.py")
         
         cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash",
+            f"source {ROS_SRC}",
+            f"source {WS_SRC}",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
             f"timeout 90 /usr/bin/python3 translate_for_assembly.py --object-name \"{object_name}\" --base-name \"{base_name}\""
@@ -2817,8 +2837,8 @@ def verify_final_assembly_pose(object_name: str, base_name: str) -> Dict[str, An
         verify_path = os.path.join(script_dir, "primitives", "verify_final_assembly_pose.py")
         
         cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash",
+            f"source {ROS_SRC}",
+            f"source {WS_SRC}",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
             f"timeout 30 /usr/bin/python3 verify_final_assembly_pose.py --object-name \"{object_name}\" --base-name \"{base_name}\""
@@ -2900,8 +2920,8 @@ def move_down(mode: str = "real") -> Dict[str, Any]:
         move_down_path = os.path.join(script_dir, "primitives", "move_down.py")
         
         cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash",
+            f"source {ROS_SRC}",
+            f"source {WS_SRC}",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
             f"/usr/bin/python3 move_down.py --mode {mode}"
@@ -2970,8 +2990,8 @@ def control_gripper(command: str, mode: str = "sim") -> Dict[str, Any]:
         control_gripper_path = os.path.join(script_dir, "primitives", "control_gripper.py")
         
         cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash",
+            f"source {ROS_SRC}",
+            f"source {WS_SRC}",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
             f"timeout 60 /usr/bin/python3 control_gripper.py {command.lower()} --mode {mode}"
@@ -3029,8 +3049,8 @@ def move_to_safe_height() -> Dict[str, Any]:
         move_to_safe_height_path = os.path.join(script_dir, "primitives", "move_to_safe_height.py")
         
         cmd_parts = [
-            "source /opt/ros/humble/setup.bash",
-            "source ~/Desktop/ros2_ws/install/setup.bash",
+            f"source {ROS_SRC}",
+            f"source {WS_SRC}",
             "export ROS_DOMAIN_ID=0",
             f"cd {script_dir}/primitives",
             f"timeout 30 /usr/bin/python3 move_to_safe_height.py"
