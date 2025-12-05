@@ -4,36 +4,36 @@
       "disabled": false,
       "timeout": 60,
       "type": "stdio",
-      "command": "/home/aaugus11/Documents/isaac-sim-mcp/mcp_venv/bin/python",
+      "command": "/home/abhara13/mambaforge/envs/env_isaaclab/bin/python",
       "args": [
-        "/home/aaugus11/Documents/isaac-sim-mcp/isaac_mcp/server.py"
+        "/home/abhara13/Desktop/RoboManufac-MCP/isaac-sim-mcp/isaac_mcp/server.py"
       ]
     },
     "ros-mcp-server": {
       "disabled": false,
       "timeout": 60,
       "type": "stdio",
-      "command": "/home/aaugus11/Documents/ros-mcp-server/.venv/bin/python",
+      "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
       "args": [
-        "/home/aaugus11/Documents/ros-mcp-server/server.py"
+        "/home/abhara13/Desktop/RoboManufac-MCP/ros-mcp-server/server.py"
       ]
     },
     "Prompts": {
       "disabled": false,
       "timeout": 60,
       "type": "stdio",
-      "command": "/home/aaugus11/Documents/mcp-server-example/.venv/bin/python",
+      "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
       "args": [
-        "/home/aaugus11/Documents/mcp-server-example/prompt.py"
+        "/home/abhara13/Desktop/RoboManufac-MCP/mcp-server-example/prompt.py"
       ]
     },
     "Resources": {
       "disabled": false,
       "timeout": 60,
       "type": "stdio",
-      "command": "/home/aaugus11/Documents/mcp-server-example/.venv/bin/python",
+      "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
       "args": [
-        "/home/aaugus11/Documents/mcp-server-example/resource.py"
+        "/home/abhara13/Desktop/RoboManufac-MCP/mcp-server-example/resource.py"
       ]
     },
     "todo": {
@@ -42,7 +42,7 @@
       "type": "stdio",
       "command": "python3",
       "args": [
-        "/home/aaugus11/Documents/todo-list-mcp/server.py"
+        "/home/abhara13/Desktop/RoboManufac-MCP/todo-list-mcp/server.py"
       ]
     }
   }
