@@ -32,7 +32,8 @@ import re
 
 
 # Configs containing paths of ROS and other related filepaths
-with open("SERVER_CFGS.yaml", "r") as f:
+config_path = Path(__file__).parent / "SERVER_PATHS_CFGS.yaml"
+with open(config_path, "r") as f:
     yaml_cfg = Box(yaml.safe_load(f))
 
 
