@@ -53,7 +53,7 @@ class ForceCompliantMoveDownController(Node):
         "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"
     ]
     
-    def __init__(self, speed, gain, deadband, max_vel, reverse=False, z_threshold=-8.0, xy_force_threshold=1.0):
+    def __init__(self, speed, gain, deadband, max_vel, reverse=False, z_threshold=-5.0, xy_force_threshold=1.0):
         super().__init__('force_compliant_move_down_controller')
         
         self.speed = speed          # m/s downward speed
@@ -365,7 +365,6 @@ class ForceCompliantMoveDownController(Node):
                     self.just_detected_contact = False  # Reset flag
                     self.get_logger().info("Entered ALIGNMENT MODE: Moving down slowly while adjusting X/Y")
                 
-                # TODO: Fix exit condition - improve alignment completion detection logic
                 # Check if we should stop in alignment mode
                 if self.alignment_mode:
                     if self.alignment_start_time is not None:
@@ -375,8 +374,12 @@ class ForceCompliantMoveDownController(Node):
                         # This prevents false triggers from forces that were low before contact
                         if elapsed >= self.alignment_min_duration:
                             # Check if X/Y forces are low for sufficient duration
-                            f_xy = self.get_force_xy(use_deadband=False)
-                            f_xy_mag = np.linalg.norm(f_xy)
+                            # Use smoothed forces to be consistent with movement calculations
+                            f_xy_raw = self.get_force_xy(use_deadband=False)
+                            # Update smoothed force (same as in get_next_waypoint)
+                            self.smoothed_force_xy = (self.force_smoothing_alpha * f_xy_raw + 
+                                                     (1.0 - self.force_smoothing_alpha) * self.smoothed_force_xy)
+                            f_xy_mag = np.linalg.norm(self.smoothed_force_xy)
                             current_time_check = time.time()
                             
                             if f_xy_mag < self.low_force_threshold:
@@ -531,8 +534,8 @@ Examples:
                         help='X/Y max compliance velocity in mm/s (default: 15.0)')
     parser.add_argument('--reverse', action='store_true',
                         help='Reverse X/Y force response directions (default: False)')
-    parser.add_argument('--z-threshold', type=float, default=-8.0,
-                        help='Z force threshold in N to detect contact (default: -8.0 N, negative = upward resistance)')
+    parser.add_argument('--z-threshold', type=float, default=-5.0,
+                        help='Z force threshold in N to detect contact (default: -5.0 N, negative = upward resistance)')
     parser.add_argument('--xy-threshold', type=float, default=1.0,
                         help='Minimum X/Y force magnitude required to enter alignment mode (default: 1.0 N)')
     args = parser.parse_args()
