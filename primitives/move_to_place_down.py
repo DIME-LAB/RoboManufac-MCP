@@ -219,9 +219,9 @@ class MoveToClearSpace(Node):
         
         # Determine target orientation based on mode
         if self.mode == 'hover':
-            # Hover mode: Use specific quaternion orientation (0, 1, 0, 0)
+            # Hover mode: Use specific quaternion orientation (0, -1, 0, 0)
             # Change to top-down (face-down) orientation
-            target_quat = np.array([0.0, 1.0, 0.0, 0.0])  # [x, y, z, w] format
+            target_quat = np.array([0.0, -1.0, 0.0, 0.0])  # [x, y, z, w] format
             target_rotation = Rot.from_quat(target_quat)
             target_rot_matrix = target_rotation.as_matrix()
             
@@ -248,7 +248,7 @@ class MoveToClearSpace(Node):
         
         if self.mode == 'hover':
             target_rpy = target_rotation.as_euler('xyz', degrees=True)
-            self.get_logger().info(f"Target orientation: quaternion [0, 1, 0, 0] (RPY: [{target_rpy[0]:.1f}, {target_rpy[1]:.1f}, {target_rpy[2]:.1f}]°)")
+            self.get_logger().info(f"Target orientation: quaternion [0, -1, 0, 0] (RPY: [{target_rpy[0]:.1f}, {target_rpy[1]:.1f}, {target_rpy[2]:.1f}]°)")
         else:
             self.get_logger().info(f"Target orientation: keeping current quaternion (no RPY conversion)")
         
