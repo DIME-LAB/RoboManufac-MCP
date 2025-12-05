@@ -48,7 +48,7 @@ EE_TOPIC = "/tcp_pose_broadcaster/pose"
 HOVER_HEIGHT = 0.15  # Height to hover above base before descending
 
 # Default base position and orientation (used if not provided via command line)
-DEFAULT_BASE_POSITION = [0.5072, -0.364, 0.1882]  # [x, y, z] in meters
+DEFAULT_BASE_POSITION = [0.5, -0.37, 0.1882]  # [x, y, z] in meters
 DEFAULT_BASE_ORIENTATION = [0.0, 0.0, 0.0, 1.0]  # [x, y, z, w] quaternion
 
 class TranslateForAssembly(Node):
