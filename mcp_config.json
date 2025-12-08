@@ -4,7 +4,7 @@
       "disabled": false,
       "timeout": 60,
       "type": "stdio",
-      "command": "/home/abhara13/mambaforge/envs/env_isaaclab/bin/python",
+      "command": "/home/abhara13/Desktop/isaacsim-5-1/kit/python.sh",
       "args": [
         "/home/abhara13/Desktop/RoboManufac-MCP/isaac-sim-mcp/isaac_mcp/server.py"
       ]
@@ -40,7 +40,7 @@
       "disabled": true,
       "timeout": 60,
       "type": "stdio",
-      "command": "python3",
+      "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
       "args": [
         "/home/abhara13/Desktop/RoboManufac-MCP/todo-list-mcp/server.py"
       ]
