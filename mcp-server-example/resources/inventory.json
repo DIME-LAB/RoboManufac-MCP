@@ -1,0 +1,24 @@
+{
+  "items": [
+    {
+      "id": "123",
+      "name": "Coffee",
+      "price": "6.99"
+    },
+    {
+      "id": "456",
+      "name": "Tea",
+      "price": "17.99"
+    },
+    {
+      "id": "789",
+      "name": "Cookies",
+      "price": "84.99"
+    },
+    {
+      "id": "999",
+      "name": "Water Bottle",
+      "price": "2.02"
+    }
+  ]
+}

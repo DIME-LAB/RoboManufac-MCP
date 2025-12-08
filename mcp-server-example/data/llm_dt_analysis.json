@@ -1,0 +1,30 @@
+[
+    {
+      "block": "jenga_2",
+      "operation": "pick_and_place",
+      "target_position": {
+        "x": 0.0,
+        "y": -0.5,
+        "z": 0.007
+      }
+    },
+    {
+      "block": "jenga_4",
+      "operation": "pick_and_place",
+      "target_position": {
+        "x": 0.074,
+        "y": -0.48,
+        "z": 0.007
+      }
+    },
+    {
+      "block": "jenga_4",
+      "operation": "push",
+      "target_position": {
+        "x": 0.024,
+        "y": -0.5,
+        "z": 0.007
+      },
+      "yaw": -90
+    }
+  ]

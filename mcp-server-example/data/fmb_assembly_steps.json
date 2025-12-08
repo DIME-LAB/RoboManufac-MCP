@@ -1,0 +1,50 @@
+[
+  {
+    "object_name": "line_brown",
+    "status": "success",
+    "grasp_id": 1,
+    "grasp_attempts": [
+      {
+        "grasp_id": 1,
+        "status": "success"
+      }
+    ]
+  },
+  {
+    "object_name": "line_red",
+    "status": "success",
+    "grasp_id": 1,
+    "grasp_attempts": [
+      {
+        "grasp_id": 1,
+        "status": "success"
+      }
+    ]
+  },
+  {
+    "object_name": "fork_orange",
+    "status": "success",
+    "grasp_id": 6,
+    "grasp_attempts": [
+      {
+        "grasp_id": 5,
+        "status": "failure"
+      },
+      {
+        "grasp_id": 6,
+        "status": "success"
+      }
+    ]
+  },
+  {
+    "object_name": "fork_yellow",
+    "status": "success",
+    "grasp_id": 6,
+    "grasp_attempts": [
+      {
+        "grasp_id": 6,
+        "status": "success"
+      }
+    ]
+  }
+]
