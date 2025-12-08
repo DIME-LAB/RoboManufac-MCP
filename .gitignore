@@ -188,3 +188,7 @@ utils/recordings/
 
 # Mobile clip files
 mobileclip_blt.ts
+
+# Under ROS MCP SERVER, exclude the YOLO-E models
+yoloe/yoloe-11s-seg.pt
+yoloe/yoloe-11s-seg-pf.pt
