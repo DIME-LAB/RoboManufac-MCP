@@ -1,0 +1,49 @@
+{
+  "mcpServers": {
+    "isaac-sim": {
+      "disabled": false,
+      "timeout": 60,
+      "type": "stdio",
+      "command": "/home/abhara13/Desktop/isaacsim-5-1/kit/python.sh",
+      "args": [
+        "/home/abhara13/Desktop/RoboManufac-MCP/isaac-sim-mcp/isaac_mcp/server.py"
+      ]
+    },
+    "ros-mcp-server": {
+      "disabled": false,
+      "timeout": 60,
+      "type": "stdio",
+      "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
+      "args": [
+        "/home/abhara13/Desktop/RoboManufac-MCP/ros-mcp-server/server.py"
+      ]
+    },
+    "Prompts": {
+      "disabled": false,
+      "timeout": 60,
+      "type": "stdio",
+      "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
+      "args": [
+        "/home/abhara13/Desktop/RoboManufac-MCP/mcp-server-example/prompt.py"
+      ]
+    },
+    "Resources": {
+      "disabled": false,
+      "timeout": 60,
+      "type": "stdio",
+      "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
+      "args": [
+        "/home/abhara13/Desktop/RoboManufac-MCP/mcp-server-example/resource.py"
+      ]
+    },
+    "todo": {
+      "disabled": true,
+      "timeout": 60,
+      "type": "stdio",
+      "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
+      "args": [
+        "/home/abhara13/Desktop/RoboManufac-MCP/todo-list-mcp/server.py"
+      ]
+    }
+  }
+}
