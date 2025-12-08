@@ -1,0 +1,5 @@
+# IDE related
+.vscode/
+
+# ROS WS 
+ros_ws/

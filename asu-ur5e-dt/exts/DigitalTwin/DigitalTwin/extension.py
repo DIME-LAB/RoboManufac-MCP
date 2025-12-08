@@ -1,0 +1,770 @@
+import omni.ext
+import omni.ui as ui
+import omni.client
+import omni.kit.commands
+
+from omni.isaac.core.world import World
+from omni.isaac.core.utils.stage import add_reference_to_stage
+from omni.isaac.core.articulations import ArticulationView
+from omni.isaac.nucleus import get_assets_root_path
+from omni.isaac.motion_generation import LulaKinematicsSolver, ArticulationKinematicsSolver
+from omni.isaac.core.utils.numpy.rotations import euler_angles_to_quats
+from omni.isaac.core.articulations import Articulation
+import omni.graph.core as og
+import omni.usd
+from pxr import Gf, Sdf, Usd, UsdGeom
+
+import asyncio
+import numpy as np
+import os
+import threading
+import glob
+import math
+
+from .og_setup import OmniGraphSetup, GripperOmniGraphSetup
+from .og_camera_setup import CameraOmniGraphSetup
+
+
+ASSET_PATH = {"UR5e": "/home/abhara13/Documents/akshay_work/omniverse_layers/Collected_fmb_assembly_scene/ur5e.usd",
+              "RG2_Gripper": "/home/abhara13/Documents/akshay_work/omniverse_layers/Collected_fmb_assembly_scene/RG2_working.usd",
+              "realsense_camera": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.0/Isaac/Sensors/Intel/RealSense/rsd455.usd",  
+              "FMB_obj_path": "/home/abhara13/Documents/akshay_work/omniverse_layers/Collected_fmb_assembly_scene/aruco_fmb/",
+             }
+
+
+class DigitalTwin(omni.ext.IExt):
+    def on_startup(self, ext_id):
+        print("[DigitalTwin] Digital Twin startup")
+
+        self._timeline = omni.timeline.get_timeline_interface()
+        self._ur5e_view = None
+        self._articulation = None
+        self._gripper_view = None
+
+        # Setup the Action Graph Classes
+        self.og_setup = OmniGraphSetup()
+        self.gripper_og_setup = GripperOmniGraphSetup()
+        self.cam_og_setup = CameraOmniGraphSetup()
+
+        
+        # Add Objects UI state
+        self._objects_folder_path = ASSET_PATH["FMB_obj_path"]
+        self._object_spacing = 0.25  # Spacing between objects along X-axis in meters
+        self._y_offset = -0.5  # Y offset for all objects
+        self._z_offset = 0.0495  # Z offset for all objects
+
+        # Isaac Sim handles ROS2 initialization automatically through its bridge
+        print("ROS2 bridge will be initialized by Isaac Sim when needed")
+
+        # Create the window UI
+        self._window = ui.Window("UR5e Digital Twin", width=300, height=800)  # Increased height
+        with self._window.frame:
+            with ui.VStack(spacing=5):
+                self.create_ui()
+
+
+    # ---------------------------- UI AND REFRESH CMDS SETUP ----------------------------
+    def create_ui(self):
+        with ui.VStack(spacing=5):
+            with ui.CollapsableFrame(title="Setup", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("Simulation Setup", alignment=ui.Alignment.LEFT)
+                    with ui.HStack(spacing=5):
+                        ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
+                        ui.Button("Refresh Graphs", width=120, height=35, clicked_fn=self.refresh_graphs)
+
+            with ui.CollapsableFrame(title="UR5e Control", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("UR5e Robot Control", alignment=ui.Alignment.LEFT)
+                    with ui.HStack(spacing=5):
+                        ui.Button("Load UR5e", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_ur5e()))
+                        ui.Button("Setup UR5e Action Graph", width=200, height=35, clicked_fn=lambda: asyncio.ensure_future(self.og_setup.setup_action_graph()))
+
+            with ui.CollapsableFrame(title="RG2 Gripper", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("RG2 Gripper Control", alignment=ui.Alignment.LEFT)
+                    with ui.HStack(spacing=5):
+                        ui.Button("Import RG2 Gripper", width=150, height=35, clicked_fn=self.import_rg2_gripper)
+                        ui.Button("Attach Gripper to UR5e", width=180, height=35, clicked_fn=self.attach_rg2_to_ur5e)
+                    
+                    with ui.HStack(spacing=5):
+                        ui.Button("Setup Gripper Action Graph", width=200, height=35, clicked_fn=self.gripper_og_setup.setup_gripper_action_graph)
+                        ui.Button("Setup Force Publish Graph", width=200, height=35, clicked_fn=self.gripper_og_setup.setup_force_publish_action_graph)
+
+            # Intel RealSense Camera
+            with ui.CollapsableFrame(title="Intel RealSense Camera", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("Intel RealSense D455 Camera", alignment=ui.Alignment.LEFT)
+                    with ui.HStack(spacing=5):
+                        ui.Button("Import RealSense Camera", width=170, height=35, clicked_fn=self.import_realsense_camera)
+                        ui.Button("Attach Camera to UR5e", width=160, height=35, clicked_fn=self.attach_camera_to_ur5e)
+                    
+                    with ui.HStack(spacing=5):
+                        ui.Button("Setup Camera Action Graph", width=200, height=35, clicked_fn=self.cam_og_setup.setup_camera_action_graph)
+
+            # NEW SECTION: Additional Camera
+            with ui.CollapsableFrame(title="Additional Camera", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("Camera Configuration", alignment=ui.Alignment.LEFT)
+                    
+                    # Camera type selection with checkboxes and labels
+                    with ui.VStack(spacing=5):
+                        with ui.HStack(spacing=5):
+                            self._exocentric_checkbox = ui.CheckBox(width=20)
+                            self._exocentric_checkbox.model.set_value(True)  # Default checked
+                            ui.Label("Exocentric View", alignment=ui.Alignment.LEFT, width=120)
+
+                        with ui.HStack(spacing=5):
+                            self._custom_checkbox = ui.CheckBox(width=20)
+                            ui.Label("Close Up View", alignment=ui.Alignment.LEFT, width=120)
+
+                    # Camera control buttons
+                    with ui.HStack(spacing=5):
+                        ui.Button("Create Camera", width=150, height=35, clicked_fn=self.create_additional_camera)
+                        ui.Button("Create Action Graph", width=180, height=35, clicked_fn=self.cam_og_setup.create_additional_camera_actiongraph)
+
+            # Add Objects section
+            with ui.CollapsableFrame(title="Add Objects", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("Import Objects from Folder", alignment=ui.Alignment.LEFT)
+                    
+                    # Folder path input
+                    with ui.HStack(spacing=5):
+                        ui.Label("Objects Folder Path:", alignment=ui.Alignment.LEFT, width=150)
+                        self._objects_path_field = ui.StringField(width=300)
+                        self._objects_path_field.model.set_value(self._objects_folder_path)
+                    
+                    # Add Objects button
+                    with ui.HStack(spacing=5):
+                        ui.Button("Add Objects", width=150, height=35, clicked_fn=self.add_objects)
+                        ui.Button("Setup pose publisher action graph", width=250, height=35, clicked_fn=self.create_pose_publisher)
+
+    async def load_scene(self):
+        world = World()
+        await world.initialize_simulation_context_async()
+        world.scene.add_default_ground_plane()
+        print("Scene loaded successfully.")
+
+    def refresh_graphs(self):
+        """Delete /World/Graphs folder and automatically recreate all graphs"""
+        import omni.usd
+        from pxr import Usd, Sdf
+        import asyncio
+        
+        print("Refreshing graphs...")
+        
+        # Get the current stage
+        stage = omni.usd.get_context().get_stage()
+        if not stage:
+            print("Error: No stage found")
+            return
+        
+        # Check which graphs exist BEFORE deleting the Graphs folder
+        graphs_path = "/World/Graphs"
+        graph_paths_to_recreate = []
+        
+        # Check for each graph's existence
+        ur5e_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_UR5e")
+        if ur5e_graph.IsValid():
+            graph_paths_to_recreate.append("UR5e")
+        
+        gripper_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_RG2")
+        if gripper_graph.IsValid():
+            graph_paths_to_recreate.append("RG2")
+        
+        force_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_RG2_ForcePublish")
+        if force_graph.IsValid():
+            graph_paths_to_recreate.append("RG2_ForcePublish")
+        
+        camera_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_Camera")
+        if camera_graph.IsValid():
+            graph_paths_to_recreate.append("Camera")
+        
+        exocentric_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_ExocentricCamera")
+        if exocentric_graph.IsValid():
+            graph_paths_to_recreate.append("ExocentricCamera")
+        
+        custom_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_CustomCamera")
+        if custom_graph.IsValid():
+            graph_paths_to_recreate.append("CustomCamera")
+        
+        objects_poses_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_objects_poses")
+        if objects_poses_graph.IsValid():
+            graph_paths_to_recreate.append("objects_poses")
+        
+        # Delete the entire /World/Graphs folder if it exists
+        graphs_prim = stage.GetPrimAtPath(graphs_path)
+        if graphs_prim.IsValid():
+            stage.RemovePrim(graphs_path)
+            print(f"Deleted existing {graphs_path} folder")
+        
+        # Recreate the Graphs folder
+        UsdGeom.Xform.Define(stage, graphs_path)
+        print(f"Created new {graphs_path} folder")
+        
+        # Automatically recreate only graphs that existed
+        print(f"Recreating {len(graph_paths_to_recreate)} existing graphs...")
+        
+        # Create UR5e Action Graph
+        if "UR5e" in graph_paths_to_recreate:
+            try:
+                asyncio.ensure_future(self.setup_action_graph())
+                print("✓ UR5e Action Graph recreated")
+            except Exception as e:
+                print(f"✗ Failed to recreate UR5e Action Graph: {e}")
+        
+        # Create Gripper Action Graph
+        if "RG2" in graph_paths_to_recreate:
+            try:
+                self.setup_gripper_action_graph()
+                print("✓ Gripper Action Graph recreated")
+            except Exception as e:
+                print(f"✗ Failed to recreate Gripper Action Graph: {e}")
+        
+        # Create Force Publish Action Graph
+        if "RG2_ForcePublish" in graph_paths_to_recreate:
+            try:
+                self.setup_force_publish_action_graph()
+                print("✓ Force Publish Action Graph recreated")
+            except Exception as e:
+                print(f"✗ Failed to recreate Force Publish Action Graph: {e}")
+        
+        # Create Camera Action Graph
+        if "Camera" in graph_paths_to_recreate:
+            try:
+                self.cam_og_setup.setup_camera_action_graph()
+                print("✓ Camera Action Graph recreated")
+            except Exception as e:
+                print(f"✗ Failed to recreate Camera Action Graph: {e}")
+        
+        # Create Additional Camera Action Graphs (only if graphs existed)
+        if "ExocentricCamera" in graph_paths_to_recreate or "CustomCamera" in graph_paths_to_recreate:
+            try:
+                stage = omni.usd.get_context().get_stage()
+                
+                if "ExocentricCamera" in graph_paths_to_recreate:
+                    # Get camera prim path from the graph's render product node if possible
+                    # For now, use default path
+                    self.cam_og_setup._create_camera_actiongraph(
+                        "/World/exocentric_camera", 
+                        1280, 720, 
+                        "exocentric_camera", 
+                        "ExocentricCamera"
+                    )
+                    print("✓ Exocentric Camera Action Graph recreated")
+                
+                if "CustomCamera" in graph_paths_to_recreate:
+                    self.cam_og_setup._create_camera_actiongraph(
+                        "/World/custom_camera", 
+                        640, 480, 
+                        "custom_camera", 
+                        "CustomCamera"
+                    )
+                    print("✓ Custom Camera Action Graph recreated")
+            except Exception as e:
+                print(f"✗ Failed to recreate Additional Camera Action Graphs: {e}")
+        
+        # Create Pose Publisher Action Graph (only if graph existed)
+        if "objects_poses" in graph_paths_to_recreate:
+            try:
+                self.create_pose_publisher()
+                print("✓ Pose Publisher Action Graph recreated")
+            except Exception as e:
+                print(f"✗ Failed to recreate Pose Publisher Action Graph: {e}")
+        
+        print("Graph refresh completed!")
+    # ---------------------------- UI AND REFRESH CMDS SETUP ----------------------------
+
+
+    # ----------------------------- ROBOT AND GRIPPER SETUP -----------------------------
+    async def load_ur5e(self):
+        asset_path = ASSET_PATH["UR5e"]
+        prim_path = "/World/UR5e"
+        
+        # 1. Add the USD asset
+        add_reference_to_stage(usd_path=asset_path, prim_path=prim_path)
+
+        # 2. Wait for prim to exist
+        import time
+        stage = omni.usd.get_context().get_stage()
+        for _ in range(10):
+            prim = stage.GetPrimAtPath(prim_path)
+            if prim.IsValid():
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError(f"Failed to load prim at {prim_path}")
+
+        # 3. Apply translation and orientation
+        xform = UsdGeom.Xform(prim)
+        xform.ClearXformOpOrder()
+
+        # Custom position and orientation
+        position = Gf.Vec3d(0.0, 0.0, 0.0)  # Replace with your desired position
+        rpy_deg = np.array([0.0, 0.0, 180.0])  # Replace with your desired RPY
+        rpy_rad = np.deg2rad(rpy_deg)
+        quat_xyzw = euler_angles_to_quats(rpy_rad)
+        quat = Gf.Quatd(quat_xyzw[0], quat_xyzw[1], quat_xyzw[2], quat_xyzw[3])
+
+        xform.AddTranslateOp().Set(position)
+        xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
+
+        print(f"Applied translation and rotation to {prim_path}")
+
+        # 4. Setup Articulation
+        self._ur5e_view = ArticulationView(prim_paths_expr=prim_path, name="ur5e_view")
+        World.instance().scene.add(self._ur5e_view)
+        await World.instance().reset_async()
+        self._timeline.stop()
+
+        self._articulation = Articulation(prim_path)
+
+        print("UR5e robot loaded successfully!")
+
+    def import_rg2_gripper(self):
+        rg2_usd_path = ASSET_PATH["RG2_Gripper"]
+        add_reference_to_stage(rg2_usd_path, "/World/RG2_Gripper")
+        print("RG2 Gripper imported at /World/RG2_Gripper")
+
+    def attach_rg2_to_ur5e(self):
+        stage = omni.usd.get_context().get_stage()
+        ur5e_gripper_path = "/World/UR5e/Gripper"
+        rg2_path = "/World/RG2_Gripper"
+        joint_path = "/World/UR5e/joints/robot_gripper_joint"
+        rg2_base_link = "/World/RG2_Gripper/onrobot_rg2_base_link"
+
+        ur5e_prim = stage.GetPrimAtPath(ur5e_gripper_path)
+        rg2_prim = stage.GetPrimAtPath(rg2_path)
+        joint_prim = stage.GetPrimAtPath(joint_path)
+
+        if not ur5e_prim or not rg2_prim:
+            print("Error: UR5e or RG2 gripper prim not found.")
+            return
+
+        # Copy transforms from UR5e gripper to RG2
+        translate_attr = ur5e_prim.GetAttribute("xformOp:translate")
+        orient_attr = ur5e_prim.GetAttribute("xformOp:orient")
+
+        if translate_attr.IsValid() and orient_attr.IsValid():
+            rg2_prim.CreateAttribute("xformOp:translate", Sdf.ValueTypeNames.Double3).Set(translate_attr.Get())
+            rg2_prim.CreateAttribute("xformOp:orient", Sdf.ValueTypeNames.Quatd).Set(orient_attr.Get())
+
+        print("Setting RG2 gripper orientation with 180° Z offset and rotated position...")
+
+
+        if rg2_prim.IsValid():
+            # === 1. Apply rotated position ===
+            original_pos = translate_attr.Get()
+            x, y, z = original_pos[0], original_pos[1], original_pos[2]
+            rotated_pos = Gf.Vec3d(-x, -y, z)
+
+            # === 2. Apply combined orientation ===
+            fixed_quat = Gf.Quatd(0.70711, Gf.Vec3d(-0.70711, 0.0, 0.0))
+            offset_rpy_deg = np.array([0.0, 0.0, 180.0])
+            offset_rpy_rad = np.deg2rad(offset_rpy_deg)
+            offset_quat_arr = euler_angles_to_quats(offset_rpy_rad)
+            offset_quat = Gf.Quatd(offset_quat_arr[0], offset_quat_arr[1], offset_quat_arr[2], offset_quat_arr[3])
+            final_quat = offset_quat * fixed_quat
+            '''# Ensure final_quat is float-precision
+            if isinstance(final_quat, Gf.Quatd):
+                final_quat = Gf.Quatf(
+                    float(final_quat.GetReal()),
+                    Gf.Vec3f(*final_quat.GetImaginary())
+                )'''
+
+            # === 3. Apply to prim ===
+            xform = UsdGeom.Xform(rg2_prim)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(rotated_pos)
+            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(final_quat)
+            '''# Get or add orient op (must be float because attribute is quatf)
+            orient_op = xform.GetOrientOp()
+            if not orient_op:
+                orient_op = xform.AddOrientOp(UsdGeom.XformOp.PrecisionFloat)
+            orient_op.Set(final_quat)'''
+
+            print(f"RG2 position rotated to: {rotated_pos}")
+            print("RG2 orientation set with fixed+180°Z rotation.")
+        else:
+            print(f"Gripper not found at {rg2_path}")
+
+        # Create or update the physics joint
+        if not joint_prim:
+            joint_prim = stage.DefinePrim(joint_path, "PhysicsFixedJoint")
+
+        joint_prim.CreateRelationship("physics:body1").SetTargets([Sdf.Path(rg2_base_link)])
+        joint_prim.CreateAttribute("physics:jointEnabled", Sdf.ValueTypeNames.Bool).Set(True)
+        joint_prim.CreateAttribute("physics:excludeFromArticulation", Sdf.ValueTypeNames.Bool).Set(True)
+
+        # Set localRot0 and localRot1 for joint
+        print("Setting joint rotation parameters...")
+        if joint_prim.IsValid():
+            def euler_to_quatf(x_deg, y_deg, z_deg):
+                """Convert Euler angles (XYZ order, degrees) to Gf.Quatf"""
+                rx = Gf.Quatf(math.cos(math.radians(x_deg) / 2), Gf.Vec3f(1, 0, 0) * math.sin(math.radians(x_deg) / 2))
+                ry = Gf.Quatf(math.cos(math.radians(y_deg) / 2), Gf.Vec3f(0, 1, 0) * math.sin(math.radians(y_deg) / 2))
+                rz = Gf.Quatf(math.cos(math.radians(z_deg) / 2), Gf.Vec3f(0, 0, 1) * math.sin(math.radians(z_deg) / 2))
+                return rx * ry * rz  # Apply in XYZ order
+
+            # Set the rotation quaternions for proper joint alignment
+            quat0 = euler_to_quatf(-90, 0, -90)
+            quat1 = euler_to_quatf(-180, 90, 0)
+            
+            joint_prim.CreateAttribute("physics:localRot0", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat0)
+            joint_prim.CreateAttribute("physics:localRot1", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat1)
+            print(" Set physics:localRot0 and localRot1 for robot_gripper_joint.")
+        else:
+            print(f" Joint not found at {joint_path}")
+
+        print("RG2 successfully attached to UR5e with proper orientation and joint configuration.")
+    # ----------------------------- ROBOT AND GRIPPER SETUP -----------------------------
+
+
+    # ---------------------------------- CAMERA SETUP ----------------------------------
+    def import_realsense_camera(self):
+        """Import Intel RealSense D455 camera"""
+        usd_path = ASSET_PATH["realsense_camera"]
+        filename = os.path.splitext(os.path.basename(usd_path))[0]
+        prim_path = f"/World/{filename}"
+        add_reference_to_stage(usd_path=usd_path, prim_path=prim_path)
+        print(f"Prim imported at {prim_path}")
+
+    def attach_camera_to_ur5e(self):
+        """Attach RealSense camera to UR5e wrist"""
+        
+        # Move the prim
+        omni.kit.commands.execute('MovePrim',
+                                 path_from="/World/rsd455",
+                                 path_to="/World/UR5e/wrist_3_link/rsd455")
+        
+        # Set transform properties
+        omni.kit.commands.execute('ChangeProperty',
+                                 prop_path="/World/UR5e/wrist_3_link/rsd455.xformOp:translate",
+                                 value=Gf.Vec3d(-0.012, -0.055, 0.1),
+                                 prev=None)
+        omni.kit.commands.execute('ChangeProperty',
+                                 prop_path="/World/UR5e/wrist_3_link/rsd455.xformOp:rotateZYX",
+                                 value=Gf.Vec3d(-90, -180, 270),
+                                 prev=None)
+        
+        print("RealSense camera attached to UR5e wrist_3_link")
+
+    def create_additional_camera(self):
+        """Create additional camera based on selected view type"""
+
+        def set_camera_pose(prim_path: str, position_xyz, quat_xyzw):
+            """Apply translation and quaternion orientation (x, y, z, w) to a camera prim."""
+            stage = omni.usd.get_context().get_stage()
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid():
+                raise RuntimeError(f"Camera prim '{prim_path}' not found.")
+            xform = UsdGeom.Xform(prim)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(*position_xyz))
+            quat = Gf.Quatd(quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2])
+            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
+
+        def configure_camera_properties(camera_prim, width, height):
+            """Configure camera properties based on resolution"""
+            # Calculate focal length and aperture based on resolution
+            # Using standard 35mm film equivalent calculations
+            # Horizontal aperture in mm (standard 35mm film is 36mm wide)
+            horizontal_aperture_mm = 36.0
+            # Vertical aperture calculated from aspect ratio
+            aspect_ratio = height / width
+            vertical_aperture_mm = horizontal_aperture_mm * aspect_ratio
+            
+            # Focal length (50mm is a standard "normal" lens)
+            focal_length_mm = 50.0
+            
+            # Convert mm to USD units (USD uses cm, but aperture is in mm in USD)
+            camera = UsdGeom.Camera(camera_prim)
+            camera.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
+            camera.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
+            camera.CreateFocalLengthAttr().Set(focal_length_mm)
+            camera.CreateProjectionAttr().Set("perspective")
+            camera.CreateClippingRangeAttr().Set(Gf.Vec2f(0.1, 10000.0))
+
+        # Check which camera type is selected
+        is_exocentric = self._exocentric_checkbox.model.get_value_as_bool()
+        is_custom = self._custom_checkbox.model.get_value_as_bool()
+
+        stage = omni.usd.get_context().get_stage()
+        if not stage:
+            print("Error: No stage found")
+            return
+
+        if is_exocentric:
+            prim_path = "/World/exocentric_camera"
+            position = (1.5, -1.5, 0.85)
+            quat_xyzw = (0.52787, 0.24907, 0.32102, 0.74583)  # x, y, z, w
+            resolution = (1280, 720)
+
+            # Create camera prim using UsdGeom.Camera
+            camera_prim = UsdGeom.Camera.Define(stage, prim_path)
+            if not camera_prim:
+                print(f"Error: Failed to create camera at {prim_path}")
+                return
+            
+            # Configure camera properties
+            configure_camera_properties(camera_prim.GetPrim(), resolution[0], resolution[1])
+            
+            # Set camera pose
+            set_camera_pose(prim_path, position, quat_xyzw)
+            print(f"Exocentric camera created at {prim_path} with resolution {resolution[0]}x{resolution[1]}")
+
+        if is_custom:
+            prim_path = "/World/custom_camera"
+            position = (0.0, 4.0, 0.5)
+            quat_xyzw = (0.0, 0.67559, 0.73728, 0.0)  # x, y, z, w
+            resolution = (640, 480)
+
+            # Create camera prim using UsdGeom.Camera
+            camera_prim = UsdGeom.Camera.Define(stage, prim_path)
+            if not camera_prim:
+                print(f"Error: Failed to create camera at {prim_path}")
+                return
+            
+            # Configure camera properties
+            configure_camera_properties(camera_prim.GetPrim(), resolution[0], resolution[1])
+            
+            # Set camera pose
+            set_camera_pose(prim_path, position, quat_xyzw)
+            print(f"Custom camera created at {prim_path} with resolution {resolution[0]}x{resolution[1]}")
+            # Note: Motion vectors would need to be added via render settings or post-processing
+    # ---------------------------------- CAMERA SETUP ----------------------------------
+
+
+    # ---------------------------------- OBJECTS SETUP ----------------------------------
+    def add_objects(self):
+        """Import all objects from the specified folder into the scene"""
+        # Get the folder path from the UI
+        folder_path = self._objects_path_field.model.get_value_as_string()
+        if not folder_path:
+            print("Error: No folder path specified")
+            return
+        
+        print(f"Adding objects from folder: {folder_path}")
+        
+        # Get the current stage and selection
+        stage = omni.usd.get_context().get_stage()
+        selection = omni.usd.get_context().get_selection()
+        selected_paths = selection.get_selected_prim_paths()
+
+        # Use current selection or fallback to /World/Objects
+        if selected_paths:
+            target_path = selected_paths[0]
+        else:
+            target_path = "/World/Objects"
+            from pxr import UsdGeom
+            if not stage.GetPrimAtPath(target_path):
+                UsdGeom.Xform.Define(stage, target_path)
+
+        # List all files in the folder
+        result, entries = omni.client.list(folder_path)
+
+        if result == omni.client.Result.OK:
+            # Filter for USD files
+            usd_files = [entry.relative_path for entry in entries 
+                         if entry.relative_path.endswith(('.usd', '.usda', '.usdc'))]
+            
+            print(f"Found {len(usd_files)} USD files")
+            
+            # Import each USD file with positioning
+            for i, usd_file in enumerate(usd_files):
+                usd_file_path = folder_path + usd_file
+                
+                # Create a child prim under the selected path
+                base_name = os.path.splitext(usd_file)[0]
+                prim_path = f"{target_path}/{base_name}"
+                
+                # Create a reference to the USD file
+                prim = stage.DefinePrim(prim_path)
+                references = prim.GetReferences()
+                references.AddReference(usd_file_path)
+                
+                # Position objects: first at center, then alternating +X and -X
+                if i == 0:
+                    # First object at center (0, 0, 0)
+                    x_position = 0.0
+                else:
+                    # Calculate position: alternating +X and -X, using configurable spacing
+                    if i % 2 == 1:  # Odd indices: +X direction
+                        x_position = self._object_spacing * ((i + 1) // 2)
+                    else:  # Even indices: -X direction
+                        x_position = -self._object_spacing * (i // 2)
+                
+                # Apply position to the parent prim
+                from pxr import UsdGeom, Gf
+                xform = UsdGeom.Xform(prim)
+                xform.ClearXformOpOrder()
+                xform.AddTranslateOp().Set(Gf.Vec3d(x_position, self._y_offset, self._z_offset))
+                
+                # Rename Body1 to match the object name
+                def rename_body1_to_object_name(stage, prim_path, object_name):
+                    """Recursively search for Body1 and rename it to object_name"""
+                    prim = stage.GetPrimAtPath(prim_path)
+                    if not prim:
+                        return False
+                    
+                    # Search for Body1 in the hierarchy
+                    for child in prim.GetAllChildren():
+                        if child.GetName() == "Body1":
+                            # Found Body1, rename it
+                            new_path = child.GetPath().GetParentPath().AppendChild(object_name)
+                            import omni.kit.commands
+                            omni.kit.commands.execute('MovePrim',
+                                path_from=child.GetPath(),
+                                path_to=new_path)
+                            print(f"Renamed Body1 to {object_name} at {new_path}")
+                            return True
+                        # Recursively search in children
+                        if rename_body1_to_object_name(stage, child.GetPath(), object_name):
+                            return True
+                    return False
+                
+                # Try to rename Body1 to the object name
+                rename_body1_to_object_name(stage, prim_path, base_name)
+                
+                print(f"Added {usd_file_path} to {prim_path} at position ({x_position}, {self._y_offset}, {self._z_offset})")
+        else:
+            print(f"Failed to list folder: {folder_path}")
+
+    def create_pose_publisher(self):
+        """Create action graph for publishing object poses to ROS2"""
+
+        def get_objects_in_folder(stage, folder_path="/World/Objects"):
+            """
+            Scan the Objects folder and find all prims following the pattern:
+            /World/Objects/{object_name}/{object_name}/{object_name}
+            
+            Args:
+                stage: USD Stage
+                folder_path: Path to the Objects folder
+            
+            Returns:
+                List of paths to object prims
+            """
+            body_paths = []
+            
+            # Get the Objects prim
+            objects_prim = stage.GetPrimAtPath(folder_path)
+            
+            if not objects_prim.IsValid():
+                print(f"Warning: {folder_path} does not exist")
+                return body_paths
+            
+            # Iterate through children (e.g., fork_orange, base, fork_yellow, line_brown)
+            for child in objects_prim.GetChildren():
+                object_name = child.GetName()
+                
+                # Look for the nested structure: {object_name}/{object_name}/object_name{}
+                nested_path = f"{folder_path}/{object_name}/{object_name}/{object_name}"
+                nested_prim = stage.GetPrimAtPath(nested_path)
+                
+                if nested_prim.IsValid():
+                    body_paths.append(nested_path)
+                    print(f"Found: {nested_path}")
+            
+            return body_paths
+
+        def create_action_graph_with_transforms(target_prims, parent_prim="/World", topic_name="objects_poses_sim"):
+            """
+            Create an action graph with OnPlaybackTick and ROS2PublishTransformTree nodes
+            
+            Args:
+                target_prims: List of prim paths to publish transforms for
+                parent_prim: Parent prim for the transform tree
+                topic_name: ROS2 topic name
+            """
+            
+            graph_path = "/World/Graphs/ActionGraph_objects_poses"
+            
+            # Create the action graph using OmniGraph API
+            keys = og.Controller.Keys
+            
+            (graph, nodes, _, _) = og.Controller.edit(
+                {
+                    "graph_path": graph_path,
+                    "evaluator_name": "execution",
+                },
+                {
+                    keys.CREATE_NODES: [
+                        ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
+                        ("ros2_publish_transform_tree", "isaacsim.ros2.bridge.ROS2PublishTransformTree"),
+                    ],
+                    keys.CONNECT: [
+                        ("on_playback_tick.outputs:tick", "ros2_publish_transform_tree.inputs:execIn"),
+                    ],
+                    keys.SET_VALUES: [
+                        ("ros2_publish_transform_tree.inputs:topicName", topic_name),
+                    ],
+                },
+            )
+            
+            # Get the stage to set relationships
+            stage = omni.usd.get_context().get_stage()
+            
+            # Get the ROS2 node prim
+            ros2_node_path = f"{graph_path}/ros2_publish_transform_tree"
+            ros2_prim = stage.GetPrimAtPath(ros2_node_path)
+            
+            if ros2_prim.IsValid():
+                # Set parent prim as a relationship
+                parent_rel = ros2_prim.GetRelationship("inputs:parentPrim")
+                if not parent_rel:
+                    parent_rel = ros2_prim.CreateRelationship("inputs:parentPrim", custom=True)
+                parent_rel.SetTargets([Sdf.Path(parent_prim)])
+                
+                # Set target prims as a relationship
+                target_rel = ros2_prim.GetRelationship("inputs:targetPrims")
+                if not target_rel:
+                    target_rel = ros2_prim.CreateRelationship("inputs:targetPrims", custom=True)
+                target_paths = [Sdf.Path(path) for path in target_prims]
+                target_rel.SetTargets(target_paths)
+                
+                print(f"Action graph created at {graph_path}")
+                print(f"Publishing {len(target_prims)} objects to topic: {topic_name}")
+            else:
+                print(f"Error: Could not find ROS2 node at {ros2_node_path}")
+
+        # Get the current USD stage
+        stage = omni.usd.get_context().get_stage()
+        
+        if not stage:
+            print("Error: No stage found")
+            return
+        
+        # Get all Body1 prims from the Objects folder
+        object_paths = get_objects_in_folder(stage, "/World/Objects")
+        
+        if not object_paths:
+            print("No objects found in /World/Objects")
+            return
+        
+        print(f"\nFound {len(object_paths)} objects:")
+        for path in object_paths:
+            print(f"  - {path}")
+        
+        # Create the action graph with all found objects
+        create_action_graph_with_transforms(
+            target_prims=object_paths,
+            parent_prim="/World",
+            topic_name="objects_poses_sim"
+        )
+        
+        print("\nAction graph created successfully!")
+    # ---------------------------------- OBJECTS SETUP ----------------------------------
+
+
+    def on_shutdown(self):
+        """Clean shutdown"""
+        print("[DigitalTwin] Digital Twin shutdown")
+        
+        # Isaac Sim handles ROS2 shutdown automatically
+        print("ROS2 bridge shutdown handled by Isaac Sim")
+        
+        # Destroy window
+        if self._window:
+            self._window.destroy()
+            self._window = None
