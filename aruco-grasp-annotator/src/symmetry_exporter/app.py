@@ -48,6 +48,69 @@ app_state = {
     "next_id": 1
 }
 
+def transform_aruco_data(aruco_raw: dict) -> dict:
+    """Transform ArUco data from new format (T_object_to_marker) to frontend format (pose_absolute)."""
+    if not aruco_raw:
+        return None
+    
+    # Transform ArUco data to match frontend expectations
+    # New format has T_object_to_marker, need to convert to pose_absolute
+    if 'markers' not in aruco_raw or not isinstance(aruco_raw['markers'], list):
+        raise ValueError(f"ArUco data must have a 'markers' array. Got keys: {list(aruco_raw.keys())}")
+    
+    if len(aruco_raw['markers']) == 0:
+        raise ValueError("ArUco data has empty 'markers' array")
+    
+    transformed_markers = []
+    default_size = aruco_raw.get('size', 0.021)  # Get size from top level
+    
+    for idx, marker in enumerate(aruco_raw['markers']):
+        if not isinstance(marker, dict):
+            raise ValueError(f"Marker at index {idx} is not a dictionary: {type(marker)}")
+        
+        # Check if already in transformed format (has pose_absolute)
+        if 'pose_absolute' in marker:
+            # Already transformed, use as-is
+            transformed_marker = marker.copy()
+            if 'size' not in transformed_marker:
+                transformed_marker['size'] = marker.get('size', default_size)
+            transformed_markers.append(transformed_marker)
+            continue
+        
+        # Need to transform from T_object_to_marker format
+        if 'T_object_to_marker' not in marker:
+            raise ValueError(f"Marker {marker.get('aruco_id', f'at index {idx}')} missing 'T_object_to_marker' or 'pose_absolute'. Marker keys: {list(marker.keys())}")
+        
+        if not isinstance(marker['T_object_to_marker'], dict):
+            raise ValueError(f"Marker {marker.get('aruco_id', f'at index {idx}')} has invalid 'T_object_to_marker' type: {type(marker['T_object_to_marker'])}")
+        
+        # Transform T_object_to_marker to pose_absolute
+        transformed_marker = {
+            'aruco_id': marker.get('aruco_id'),
+            'size': marker.get('size', default_size),  # Use marker size or default
+            'face_type': marker.get('face_type'),
+            'surface_normal': marker.get('surface_normal'),
+        }
+        
+        # Convert T_object_to_marker to pose_absolute
+        t_obj_to_marker = marker['T_object_to_marker']
+        if 'position' not in t_obj_to_marker or 'rotation' not in t_obj_to_marker:
+            raise ValueError(f"Marker {marker.get('aruco_id', f'at index {idx}')} T_object_to_marker missing 'position' or 'rotation'. Keys: {list(t_obj_to_marker.keys())}")
+        
+        transformed_marker['pose_absolute'] = {
+            'position': t_obj_to_marker.get('position', {'x': 0, 'y': 0, 'z': 0}),
+            'rotation': t_obj_to_marker.get('rotation', {'roll': 0, 'pitch': 0, 'yaw': 0})
+        }
+        
+        transformed_markers.append(transformed_marker)
+    
+    return {
+        'markers': transformed_markers,
+        'aruco_dictionary': aruco_raw.get('aruco_dictionary', 'DICT_4X4_50'),
+        'size': default_size,
+        'border_width': aruco_raw.get('border_width', 0.05)
+    }
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     """Serve the complete 3D visualization interface."""
@@ -1030,7 +1093,8 @@ async def read_root():
                 let angleDeg = (angleRad * 180 / Math.PI);
                 angleDeg = angleDeg % 360;
                 if (angleDeg < 0) angleDeg += 360;
-                return Math.round(angleDeg);
+                // Round to nearest 5 degrees
+                return Math.round(angleDeg / 5) * 5;
             }
             
             function getQuaternionDisplay(rotation) {
@@ -1080,31 +1144,31 @@ async def read_root():
                             <h4>Rotation (degrees)</h4>
                             <div class="control-row">
                                 <span class="control-label">X:</span>
-                                <input type="range" class="control-input" min="0" max="360" step="1" 
+                                <input type="range" class="control-input" min="0" max="360" step="5" 
                                        value="${normalizeAngleForSlider(angles.x)}" 
                                        oninput="setObjectRotationFromSlider('x', this.value)"
                                        style="flex: 1; margin: 0 10px;">
-                                <input type="number" class="control-input" step="1" value="${(angles.x * 180 / Math.PI).toFixed(1)}" 
+                                <input type="number" class="control-input" step="5" value="${Math.round((angles.x * 180 / Math.PI) / 5) * 5}" 
                                        onchange="setObjectRotation('x', this.value * Math.PI / 180)"
                                        style="width: 80px;">
                             </div>
                             <div class="control-row">
                                 <span class="control-label">Y:</span>
-                                <input type="range" class="control-input" min="0" max="360" step="1" 
+                                <input type="range" class="control-input" min="0" max="360" step="5" 
                                        value="${normalizeAngleForSlider(angles.y)}" 
                                        oninput="setObjectRotationFromSlider('y', this.value)"
                                        style="flex: 1; margin: 0 10px;">
-                                <input type="number" class="control-input" step="1" value="${(angles.y * 180 / Math.PI).toFixed(1)}" 
+                                <input type="number" class="control-input" step="5" value="${Math.round((angles.y * 180 / Math.PI) / 5) * 5}" 
                                        onchange="setObjectRotation('y', this.value * Math.PI / 180)"
                                        style="width: 80px;">
                             </div>
                             <div class="control-row">
                                 <span class="control-label">Z:</span>
-                                <input type="range" class="control-input" min="0" max="360" step="1" 
+                                <input type="range" class="control-input" min="0" max="360" step="5" 
                                        value="${normalizeAngleForSlider(angles.z)}" 
                                        oninput="setObjectRotationFromSlider('z', this.value)"
                                        style="flex: 1; margin: 0 10px;">
-                                <input type="number" class="control-input" step="1" value="${(angles.z * 180 / Math.PI).toFixed(1)}" 
+                                <input type="number" class="control-input" step="5" value="${Math.round((angles.z * 180 / Math.PI) / 5) * 5}" 
                                        onchange="setObjectRotation('z', this.value * Math.PI / 180)"
                                        style="width: 80px;">
                             </div>
@@ -1146,7 +1210,9 @@ async def read_root():
                 if (!selectedObject) return;
                 if (selectedObject.userData.type !== 'component') return;
                 const obj = selectedObject;
-                const radians = parseFloat(value);
+                // Snap to nearest 5 degrees
+                const degrees = Math.round(parseFloat(value) * 180 / Math.PI / 5) * 5;
+                const radians = degrees * Math.PI / 180;
                 const angles = obj.userData.sliderAngles || { x: obj.rotation.x, y: obj.rotation.y, z: obj.rotation.z };
                 const prev = angles[axis] || 0;
                 const delta = radians - prev;
@@ -1157,14 +1223,16 @@ async def read_root():
                 obj.userData.sliderAngles = angles;
                 checkFoldSymmetry(axis);
                 updateSelectedObjectInfo();  // Update to refresh quaternion display
-                updateStatus(`Rotated ${obj.userData.displayName} ${axis.toUpperCase()}: ${(radians * 180 / Math.PI).toFixed(1)}°`);
+                updateStatus(`Rotated ${obj.userData.displayName} ${axis.toUpperCase()}: ${degrees}°`);
             }
             
             function setObjectRotationFromSlider(axis, value) {
                 if (!selectedObject) return;
                 if (selectedObject.userData.type !== 'component') return;
                 const obj = selectedObject;
-                const radians = parseFloat(value) * Math.PI / 180;
+                // Snap to nearest 5 degrees
+                const degrees = Math.round(parseFloat(value) / 5) * 5;
+                const radians = degrees * Math.PI / 180;
                 const angles = obj.userData.sliderAngles || { x: obj.rotation.x, y: obj.rotation.y, z: obj.rotation.z };
                 const prev = angles[axis] || 0;
                 const delta = radians - prev;
@@ -1180,7 +1248,7 @@ async def read_root():
                 if (infoContainer) {
                     const numberInput = infoContainer.querySelector(`input[type="number"][onchange*="${axis}"]`);
                     if (numberInput) {
-                        numberInput.value = parseFloat(value).toFixed(1);
+                        numberInput.value = degrees;
                     }
                 }
                 
@@ -1928,6 +1996,21 @@ async def read_root():
                 updateStatusBar();
             }
             
+            // Attach functions to window for HTML onclick handlers
+            window.loadAllComponents = loadAllComponents;
+            window.clearScene = clearScene;
+            window.loadSymmetry = loadSymmetry;
+            window.exportSymmetry = exportSymmetry;
+            window.toggleGrid = toggleGrid;
+            window.resetCamera = resetCamera;
+            window.hideFloatingControls = hideFloatingControls;
+            window.showFloatingControls = showFloatingControls;
+            window.resetObjectRotation = resetObjectRotation;
+            window.deleteSelectedObject = deleteSelectedObject;
+            window.setObjectRotationFromSlider = setObjectRotationFromSlider;
+            window.setObjectRotation = setObjectRotation;
+            window.updateFoldValue = updateFoldValue;
+            
             // Initialize when page loads
             window.addEventListener('load', initScene);
         </script>
@@ -1953,8 +2036,14 @@ async def get_components():
                 # Load ArUco data if available
                 aruco_data = None
                 if aruco_path.exists():
-                    with open(aruco_path, 'r') as f:
-                        aruco_data = json.load(f)
+                    try:
+                        with open(aruco_path, 'r') as f:
+                            aruco_raw = json.load(f)
+                        # Transform ArUco data to frontend format
+                        aruco_data = transform_aruco_data(aruco_raw)
+                    except Exception as e:
+                        print(f"Warning: Error transforming ArUco data for {component_name}: {e}")
+                        aruco_data = None
                 
                 components[component_name] = {
                     "wireframe": wireframe_data,
@@ -1989,8 +2078,14 @@ async def get_component(component_name: str):
         
         aruco_data = None
         if aruco_path.exists():
-            with open(aruco_path, 'r') as f:
-                aruco_data = json.load(f)
+            try:
+                with open(aruco_path, 'r') as f:
+                    aruco_raw = json.load(f)
+                # Transform ArUco data to frontend format
+                aruco_data = transform_aruco_data(aruco_raw)
+            except Exception as e:
+                print(f"Warning: Error transforming ArUco data for {component_name}: {e}")
+                aruco_data = None
         
         return {
             "wireframe": wireframe_data,
