@@ -6,24 +6,29 @@
 - [ ] Add networking / ufw instructions for ROS2 / URSim.
 - [ ] Install instructions for UR Robot Driver, rosbridge_suite.
 - [ ] Install instructions for ROS2 Workspace: containing OnRobot Gripper control, Grasp Points Publisher, Max Camera Localizer setup (and Orbbec Camera?) 
+- [ ] Download paths for Isaac Sim assets for the DT extension
 - [ ] Instructions for setting up Isaac Sim extensions?
 - [ ] Give locations & setup instructions for all path config files.
 - [ ] Give instructions for setting up UR ROS2 driver.
 - [ ] Python environments setup instructions?
+- [ ] Instructions for mcp-client setup and install
 
 
 
 ### Requirements
 - Isaac Sim: Instructions for install are here: [Isaac Sim 5.1 install instructions](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/quick-install.html)
+- Install Python-Box library:
+```pip install python-box```
 
 
 
 ### Setup vars
 1. Under mcp-client-example/mcp_config.json, set up correct Paths to the MCP Servers and Paths to relevant Python executables.
 2. Under ros-mcp-server/SERVER_PATHS_CFG.yaml, set up IP Addresses, ROS WS Paths and Primitive Controllers' paths
+3. Under asu-ur5e-dt/exts/DigitalTwin/DigitalTwin/ASSET_PATHS.yaml, set up the asset paths for the Robot, Gripper, Camera and the FMB Objects.
 
 
-### Start MCP-Client
+### Start Digital Twin and MCP-Client
 
 1. Start URSim and/or turn on the robot.
 ```
@@ -72,7 +77,7 @@ export OPENAI_API_KEY=your_openai_key_here
 Start the Client:
 
 ```
-cd ~/Desktop/RoboManufac-MCP/mcp-client-example
+cd ~/Desktop/MCP_UNIFIED/RoboManufac-MCP/mcp-client-example
 node dist/bin.js --list-servers
 node dist/bin.js --all --provider=openai    # or --provider=claude
 ```

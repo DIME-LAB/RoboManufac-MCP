@@ -21,6 +21,10 @@ import sys
 import argparse
 import numpy as np
 from scipy.spatial.transform import Rotation as R
+import yaml
+from pathlib import Path
+from box import Box
+
 
 # Import from local action_libraries file
 from action_libraries import hover_over_grasp_quat
@@ -44,6 +48,13 @@ except ImportError:
     print("Warning: max_camera_msgs GraspPointArray not found. Using geometry_msgs.PoseStamped as fallback.")
     GraspPointArray = None
     GraspPoint = None
+
+
+# Configs containing paths of ROS and other related filepaths
+config_path = Path(__file__).parent.parent / "SERVER_PATHS_CFGS.yaml"
+with open(config_path, "r") as f:
+    yaml_cfg = Box(yaml.safe_load(f))
+
 
 class PoseKalmanFilter:
     """Kalman filter for pose estimation and smoothing"""
@@ -227,7 +238,7 @@ class DirectObjectMove(Node):
         self.get_logger().info("✅ Quaternion orientation controller initialized (gimbal-lock-free mode)")
         
         # Fold symmetry directory for canonical pose matching
-        self.symmetry_dir = "/home/aaugus11/Projects/aruco-grasp-annotator/data/symmetry"
+        self.symmetry_dir = f"{yaml_cfg.aruco_annot_path}/data/symmetry"
         
         # Store latest grasp points
         self.latest_grasp_points = None

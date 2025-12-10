@@ -6,7 +6,7 @@
       "type": "stdio",
       "command": "/home/abhara13/Desktop/isaacsim-5-1/kit/python.sh",
       "args": [
-        "/home/abhara13/Desktop/RoboManufac-MCP/isaac-sim-mcp/isaac_mcp/server.py"
+        "/home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/isaac-sim-mcp/isaac_mcp/server.py"
       ]
     },
     "ros-mcp-server": {
@@ -15,7 +15,7 @@
       "type": "stdio",
       "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
       "args": [
-        "/home/abhara13/Desktop/RoboManufac-MCP/ros-mcp-server/server.py"
+        "/home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/ros-mcp-server/server.py"
       ]
     },
     "Prompts": {
@@ -24,7 +24,7 @@
       "type": "stdio",
       "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
       "args": [
-        "/home/abhara13/Desktop/RoboManufac-MCP/mcp-server-example/prompt.py"
+        "/home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/mcp-server-example/prompt.py"
       ]
     },
     "Resources": {
@@ -33,7 +33,7 @@
       "type": "stdio",
       "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
       "args": [
-        "/home/abhara13/Desktop/RoboManufac-MCP/mcp-server-example/resource.py"
+        "/home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/mcp-server-example/resource.py"
       ]
     },
     "todo": {
@@ -42,7 +42,7 @@
       "type": "stdio",
       "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
       "args": [
-        "/home/abhara13/Desktop/RoboManufac-MCP/todo-list-mcp/server.py"
+        "/home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/todo-list-mcp/server.py"
       ]
     }
   }

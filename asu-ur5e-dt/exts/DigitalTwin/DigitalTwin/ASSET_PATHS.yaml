@@ -1,0 +1,4 @@
+ur5e: "/home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/assets/Collected_fmb_assembly_scene/ur5e.usd"
+rg2_gripper: "/home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/assets/Collected_fmb_assembly_scene/RG2.usd"
+realsense_camera: "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Sensors/Intel/RealSense/rsd455.usd"
+fmb_objects: "/home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/assets/Collected_fmb_assembly_scene/aruco_fmb/"

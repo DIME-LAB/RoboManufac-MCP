@@ -17,6 +17,8 @@ from pxr import Gf, Sdf, Usd, UsdGeom
 import asyncio
 import numpy as np
 import os
+from pathlib import Path
+import yaml
 import threading
 import glob
 import math
@@ -25,10 +27,15 @@ from .og_setup import OmniGraphSetup, GripperOmniGraphSetup
 from .og_camera_setup import CameraOmniGraphSetup
 
 
-ASSET_PATH = {"UR5e": "/home/abhara13/Documents/akshay_work/omniverse_layers/Collected_fmb_assembly_scene/ur5e.usd",
-              "RG2_Gripper": "/home/abhara13/Documents/akshay_work/omniverse_layers/Collected_fmb_assembly_scene/RG2_working.usd",
-              "realsense_camera": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.0/Isaac/Sensors/Intel/RealSense/rsd455.usd",  
-              "FMB_obj_path": "/home/abhara13/Documents/akshay_work/omniverse_layers/Collected_fmb_assembly_scene/aruco_fmb/",
+# Configs containing paths of ROS and other related filepaths
+config_path = Path(__file__).parent / "ASSET_PATHS.yaml"
+with open(config_path, "r") as f:
+    asset_cfg = yaml.safe_load(f)
+
+ASSET_PATH = {"UR5e": asset_cfg["ur5e"],
+              "RG2_Gripper": asset_cfg["rg2_gripper"],
+              "realsense_camera": asset_cfg["realsense_camera"],  
+              "FMB_obj_path": asset_cfg["fmb_objects"],
              }
 
 

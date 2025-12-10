@@ -17,9 +17,17 @@ import time
 import sys
 import yaml
 import argparse
+from pathlib import Path
+from box import Box
+
+
+# Configs containing paths of ROS and other related filepaths
+config_path = Path(__file__).parent.parent / "SERVER_PATHS_CFGS.yaml"
+with open(config_path, "r") as f:
+    yaml_cfg = Box(yaml.safe_load(f))
 
 # Add path to your ur_asu package
-main_path = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main"
+main_path = f"{yaml_cfg.ws_path}/src/ur_asu-main"
 if main_path not in sys.path:
     sys.path.append(main_path)
 

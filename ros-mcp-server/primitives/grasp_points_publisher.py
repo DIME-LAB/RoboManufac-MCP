@@ -47,6 +47,9 @@ except ImportError:
     raise
 
 
+GRASP_DATA_DIR="/home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/aruco-grasp-annotator/data/grasp"
+
+
 class GraspPointsPublisher(Node):
     """ROS2 node that publishes grasp points based on object poses"""
     
@@ -63,7 +66,7 @@ class GraspPointsPublisher(Node):
         if data_dir is None:
             # Default to data/grasp relative to this file
             script_dir = Path(__file__).parent.parent.parent
-            self.data_dir = Path("/home/aaugus11/Projects/aruco-grasp-annotator/data/grasp")
+            self.data_dir = Path(GRASP_DATA_DIR)
         else:
             self.data_dir = Path(data_dir)
         

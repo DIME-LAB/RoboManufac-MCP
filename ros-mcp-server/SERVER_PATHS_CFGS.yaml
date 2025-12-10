@@ -1,4 +1,6 @@
-mcp_wrkdir: "/home/abhara13/Desktop/RoboManufac-MCP/ros-mcp-server"
+mcp_wrkdir: "/home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/ros-mcp-server"
+
+aruco_annot_path: "home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/aruco-grasp-annotator"
 
 rosbridge:
   local_ip: "192.168.56.1"
@@ -7,6 +9,7 @@ rosbridge:
 
 ros_paths:
   ros_src_path: "/opt/ros/humble/setup.bash"
-  ws_src_path: "/home/abhara13/Desktop/RoboManufac-MCP/ros_ws/install/setup.bash"
-  custom_lib_path: "/home/abhara13/Desktop/RoboManufac-MCP/ros_ws/src/ur_asu-main/ur_asu/custom_libraries"
-  primitive_libs_path: "/home/abhara13/Desktop/RoboManufac-MCP/ros_ws/src/ur_asu-main/ur_asu/scripts/primitives"
+  ws_path: "/home/abhara13/Desktop/MCP-UNIFIED/ros_ws"
+  ws_src_path: "/home/abhara13/Desktop/MCP-UNIFIED/ros_ws/install/setup.bash"
+  custom_lib_path: "/home/abhara13/Desktop/MCP-UNIFIED/ros_ws/src/ur_asu-main/ur_asu/custom_libraries"
+  primitive_libs_path: "/home/abhara13/Desktop/MCP-UNIFIED/ros_ws/src/ur_asu-main/ur_asu/scripts/primitives"

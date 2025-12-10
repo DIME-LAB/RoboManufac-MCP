@@ -68,7 +68,7 @@ Set MCP setting to mcp.json.
     "ros-mcp-server": {
       "command": "/usr/bin/python",
       "args": [
-        "/home/aaugus11/Documents/ros-mcp-server/server.py"
+        "~/Desktop/MCP-UNIFIED/RoboManufac-MCP/ros-mcp-server/server.py"
       ]
     }
   }

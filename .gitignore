@@ -3,3 +3,9 @@
 
 # ROS WS 
 ros_ws/
+
+# Startup Scripts
+startup_bash/
+
+# Assets
+assets/

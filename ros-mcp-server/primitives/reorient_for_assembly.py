@@ -30,9 +30,18 @@ import time
 import sys
 import os
 import glob
+import yaml
+from pathlib import Path
+from box import Box
+
+
+# Configs containing paths of ROS and other related filepaths
+config_path = Path(__file__).parent.parent / "SERVER_PATHS_CFGS.yaml"
+with open(config_path, "r") as f:
+    yaml_cfg = Box(yaml.safe_load(f))
 
 # Add custom libraries to Python path for IK solver
-custom_lib_path = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries"
+custom_lib_path = yaml_cfg.ros_paths.custom_lib_path
 if custom_lib_path not in sys.path:
     sys.path.append(custom_lib_path)
 
@@ -43,8 +52,8 @@ except ImportError as e:
     sys.exit(1)
 
 # Configuration
-ASSEMBLY_JSON_FILE = "/home/aaugus11/Projects/aruco-grasp-annotator/data/fmb_assembly.json"
-SYMMETRY_DIR = "/home/aaugus11/Projects/aruco-grasp-annotator/data/symmetry"
+ASSEMBLY_JSON_FILE = f"{yaml_cfg.aruco_annot_path}/data/fmb_assembly.json"
+SYMMETRY_DIR = f"{yaml_cfg.aruco_annot_path}/data/symmetry"
 DEFAULT_OBJECT_TOPIC = "/objects_poses_sim"
 DEFAULT_EE_TOPIC = "/tcp_pose_broadcaster/pose"
 

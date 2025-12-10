@@ -32,17 +32,28 @@ import numpy as np
 import time
 import argparse
 import sys
-
-# IK Solver
-IK_SOLVER_PATH = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries"
-if IK_SOLVER_PATH not in sys.path:
-    sys.path.append(IK_SOLVER_PATH)
+from pathlib import Path
+from box import Box
+import yaml
 
 from ik_solver import compute_ik, ik_objective_quaternion
 from scipy.optimize import minimize
 from tf2_msgs.msg import TFMessage
 import json
 import os
+
+
+# Configs containing paths of ROS and other related filepaths
+config_path = Path(__file__).parent.parent / "SERVER_PATHS_CFGS.yaml"
+with open(config_path, "r") as f:
+    yaml_cfg = Box(yaml.safe_load(f))
+
+# IK Solver
+IK_SOLVER_PATH = yaml_cfg.ros_paths.custom_lib_path
+if IK_SOLVER_PATH not in sys.path:
+    sys.path.append(IK_SOLVER_PATH)
+
+ASSEMBLY_JSON_FILE = f"{yaml_cfg.aruco_annot_path}/data/fmb_assembly.json"
 
 
 class ForceCompliantMoveDownController(Node):
@@ -70,7 +81,6 @@ class ForceCompliantMoveDownController(Node):
             self.object_name = object_name
             self.base_name = base_name
             # Load assembly config for sim mode
-            ASSEMBLY_JSON_FILE = "/home/aaugus11/Projects/aruco-grasp-annotator/data/fmb_assembly.json"
             self.assembly_config = self.load_assembly_config(ASSEMBLY_JSON_FILE)
             # Subscribe to object poses topic
             self.current_poses = {}

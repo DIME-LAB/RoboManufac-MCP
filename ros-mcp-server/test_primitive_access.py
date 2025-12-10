@@ -6,12 +6,24 @@ Test script to verify MCP server can access and run primitive scripts
 import sys
 import os
 import subprocess
+from pathlib import Path
+from box import Box
+import yaml
+
+
+# Configs containing paths of ROS and other related filepaths
+config_path = Path(__file__).parent / "SERVER_PATHS_CFGS.yaml"
+with open(config_path, "r") as f:
+    yaml_cfg = Box(yaml.safe_load(f))
+
+PRIMITIVE_LIBS_PATH = yaml_cfg.ros_paths.primitive_libs_path
+
 
 def test_primitive_access():
     """Test if we can access and run the primitive scripts"""
     
     # Path to primitive scripts
-    primitives_dir = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/scripts/primitives"
+    primitives_dir = PRIMITIVE_LIBS_PATH
     
     print("🔍 Testing primitive script access...")
     print(f"📁 Primitives directory: {primitives_dir}")

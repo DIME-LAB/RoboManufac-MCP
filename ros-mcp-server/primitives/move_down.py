@@ -26,10 +26,6 @@ import argparse
 import threading
 import time
 
-# Add custom libraries to Python path
-custom_lib_path = "/home/aaugus11/Desktop/ros2_ws/src/ur_asu-main/ur_asu/custom_libraries"
-if custom_lib_path not in sys.path:
-    sys.path.append(custom_lib_path)
 
 try:
     from ik_solver import compute_ik, compute_ik_robust
