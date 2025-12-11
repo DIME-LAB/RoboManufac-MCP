@@ -215,7 +215,7 @@ class DigitalTwin(omni.ext.IExt):
         # Create UR5e Action Graph
         if "UR5e" in graph_paths_to_recreate:
             try:
-                asyncio.ensure_future(self.setup_action_graph())
+                asyncio.ensure_future(self.og_setup.setup_action_graph())
                 print("✓ UR5e Action Graph recreated")
             except Exception as e:
                 print(f"✗ Failed to recreate UR5e Action Graph: {e}")
@@ -223,7 +223,7 @@ class DigitalTwin(omni.ext.IExt):
         # Create Gripper Action Graph
         if "RG2" in graph_paths_to_recreate:
             try:
-                self.setup_gripper_action_graph()
+                self.gripper_og_setup.setup_gripper_action_graph()
                 print("✓ Gripper Action Graph recreated")
             except Exception as e:
                 print(f"✗ Failed to recreate Gripper Action Graph: {e}")
@@ -231,7 +231,7 @@ class DigitalTwin(omni.ext.IExt):
         # Create Force Publish Action Graph
         if "RG2_ForcePublish" in graph_paths_to_recreate:
             try:
-                self.setup_force_publish_action_graph()
+                self.gripper_og_setup.setup_force_publish_action_graph()
                 print("✓ Force Publish Action Graph recreated")
             except Exception as e:
                 print(f"✗ Failed to recreate Force Publish Action Graph: {e}")
