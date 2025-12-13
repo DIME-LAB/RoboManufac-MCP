@@ -1,0 +1,3246 @@
+{
+  "object_name": "fork_yellow",
+  "total_grasp_candidates": 162,
+  "grasp_candidates": [
+    {
+      "grasp_point_id": 1,
+      "direction_id": 1,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "approach_rpy": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 2,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 1.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": -180.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 3,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": 0.5,
+        "z": 0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 4,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": -0.5,
+        "z": -0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 5,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.7071067811865475,
+        "z": 0.7071067811865475,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 6,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.7071067811865475,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.7071067811865475
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 7,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 135.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 8,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.2705980500730985,
+        "z": 0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 45.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 9,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": -0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -135.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 10,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.2705980500730985,
+        "z": -0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -45.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 11,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 12,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.6532814824381882,
+        "z": 0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 13,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": -0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 14,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.6532814824381882,
+        "z": -0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 15,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.3826834323650898,
+        "z": 0.9238795325112867,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 16,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.9238795325112867,
+        "z": 0.3826834323650898,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 17,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.3826834323650898,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.9238795325112867
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 1,
+      "direction_id": 18,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.9238795325112867,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.3826834323650898
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 1,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "approach_rpy": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 2,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 1.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": -180.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 3,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": 0.5,
+        "z": 0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 4,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": -0.5,
+        "z": -0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 5,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.7071067811865475,
+        "z": 0.7071067811865475,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 6,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.7071067811865475,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.7071067811865475
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 7,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 135.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 8,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.2705980500730985,
+        "z": 0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 45.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 9,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": -0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -135.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 10,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.2705980500730985,
+        "z": -0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -45.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 11,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 12,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.6532814824381882,
+        "z": 0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 13,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": -0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 14,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.6532814824381882,
+        "z": -0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 15,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.3826834323650898,
+        "z": 0.9238795325112867,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 16,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.9238795325112867,
+        "z": 0.3826834323650898,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 17,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.3826834323650898,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.9238795325112867
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 2,
+      "direction_id": 18,
+      "grasp_candidate_position": {
+        "x": -0.050051775420438475,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.9238795325112867,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.3826834323650898
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 1,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "approach_rpy": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 2,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 1.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": -180.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 3,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": 0.5,
+        "z": 0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 4,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": -0.5,
+        "z": -0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 5,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.7071067811865475,
+        "z": 0.7071067811865475,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 6,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.7071067811865475,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.7071067811865475
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 7,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 135.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 8,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.2705980500730985,
+        "z": 0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 45.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 9,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": -0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -135.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 10,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.2705980500730985,
+        "z": -0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -45.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 11,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 12,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.6532814824381882,
+        "z": 0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 13,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": -0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 14,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.6532814824381882,
+        "z": -0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 15,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.3826834323650898,
+        "z": 0.9238795325112867,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 16,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.9238795325112867,
+        "z": 0.3826834323650898,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 17,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.3826834323650898,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.9238795325112867
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 3,
+      "direction_id": 18,
+      "grasp_candidate_position": {
+        "x": -0.026940620058517894,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.9238795325112867,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.3826834323650898
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 1,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "approach_rpy": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 2,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 1.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": -180.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 3,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": 0.5,
+        "z": 0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 4,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": -0.5,
+        "z": -0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 5,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.7071067811865475,
+        "z": 0.7071067811865475,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 6,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.7071067811865475,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.7071067811865475
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 7,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 135.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 8,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.2705980500730985,
+        "z": 0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 45.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 9,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": -0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -135.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 10,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.2705980500730985,
+        "z": -0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -45.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 11,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 12,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.6532814824381882,
+        "z": 0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 13,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": -0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 14,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.6532814824381882,
+        "z": -0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 15,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.3826834323650898,
+        "z": 0.9238795325112867,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 16,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.9238795325112867,
+        "z": 0.3826834323650898,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 17,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.3826834323650898,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.9238795325112867
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 4,
+      "direction_id": 18,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.9238795325112867,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.3826834323650898
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 1,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "approach_rpy": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 2,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 1.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": -180.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 3,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": 0.5,
+        "z": 0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 4,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": -0.5,
+        "z": -0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 5,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.7071067811865475,
+        "z": 0.7071067811865475,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 6,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.7071067811865475,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.7071067811865475
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 7,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 135.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 8,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.2705980500730985,
+        "z": 0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 45.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 9,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": -0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -135.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 10,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.2705980500730985,
+        "z": -0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -45.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 11,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 12,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.6532814824381882,
+        "z": 0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 13,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": -0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 14,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.6532814824381882,
+        "z": -0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 15,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.3826834323650898,
+        "z": 0.9238795325112867,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 16,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.9238795325112867,
+        "z": 0.3826834323650898,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 17,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.3826834323650898,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.9238795325112867
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 5,
+      "direction_id": 18,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.9238795325112867,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.3826834323650898
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 1,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "approach_rpy": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 2,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 1.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": -180.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 3,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": 0.5,
+        "z": 0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 4,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": -0.5,
+        "z": -0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 5,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.7071067811865475,
+        "z": 0.7071067811865475,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 6,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.7071067811865475,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.7071067811865475
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 7,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 135.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 8,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.2705980500730985,
+        "z": 0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 45.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 9,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": -0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -135.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 10,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.2705980500730985,
+        "z": -0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -45.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 11,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 12,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.6532814824381882,
+        "z": 0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 13,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": -0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 14,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.6532814824381882,
+        "z": -0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 15,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.3826834323650898,
+        "z": 0.9238795325112867,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 16,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.9238795325112867,
+        "z": 0.3826834323650898,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 17,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.3826834323650898,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.9238795325112867
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 6,
+      "direction_id": 18,
+      "grasp_candidate_position": {
+        "x": -6.71835911683738e-05,
+        "y": -0.02458919436762481,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.9238795325112867,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.3826834323650898
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 1,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "approach_rpy": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 2,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 1.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": -180.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 3,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": 0.5,
+        "z": 0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 4,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": -0.5,
+        "z": -0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 5,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.7071067811865475,
+        "z": 0.7071067811865475,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 6,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.7071067811865475,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.7071067811865475
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 7,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 135.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 8,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.2705980500730985,
+        "z": 0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 45.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 9,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": -0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -135.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 10,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.2705980500730985,
+        "z": -0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -45.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 11,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 12,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.6532814824381882,
+        "z": 0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 13,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": -0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 14,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.6532814824381882,
+        "z": -0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 15,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.3826834323650898,
+        "z": 0.9238795325112867,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 16,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.9238795325112867,
+        "z": 0.3826834323650898,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 17,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.3826834323650898,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.9238795325112867
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 7,
+      "direction_id": 18,
+      "grasp_candidate_position": {
+        "x": 0.026806252876181148,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.9238795325112867,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.3826834323650898
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 1,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "approach_rpy": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 2,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 1.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": -180.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 3,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": 0.5,
+        "z": 0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 4,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": -0.5,
+        "z": -0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 5,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.7071067811865475,
+        "z": 0.7071067811865475,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 6,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.7071067811865475,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.7071067811865475
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 7,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 135.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 8,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.2705980500730985,
+        "z": 0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 45.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 9,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": -0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -135.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 10,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.2705980500730985,
+        "z": -0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -45.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 11,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 12,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.6532814824381882,
+        "z": 0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 13,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": -0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 14,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.6532814824381882,
+        "z": -0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 15,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.3826834323650898,
+        "z": 0.9238795325112867,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 16,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.9238795325112867,
+        "z": 0.3826834323650898,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 17,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.3826834323650898,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.9238795325112867
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 8,
+      "direction_id": 18,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": 0.01780365165961906,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.9238795325112867,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.3826834323650898
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 1,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "approach_rpy": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 2,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 1.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": -180.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 3,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": 0.5,
+        "z": 0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 4,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.5,
+        "y": -0.5,
+        "z": -0.5,
+        "w": 0.5
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 5,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.7071067811865475,
+        "z": 0.7071067811865475,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 6,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.7071067811865475,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.7071067811865475
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 7,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 135.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 8,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.2705980500730985,
+        "z": 0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": 45.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 9,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.6532814824381882,
+        "z": 0.6532814824381882,
+        "w": -0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -135.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 10,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.2705980500730985,
+        "z": -0.2705980500730985,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 90.0,
+        "pitch": 0.0,
+        "yaw": -45.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 11,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": 0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 12,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": 0.6532814824381882,
+        "z": 0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 90.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 13,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": -0.2705980500730985,
+        "y": 0.2705980500730985,
+        "z": 0.6532814824381882,
+        "w": -0.6532814824381882
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 14,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.6532814824381882,
+        "y": -0.6532814824381882,
+        "z": -0.2705980500730985,
+        "w": 0.2705980500730985
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -90.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 15,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.3826834323650898,
+        "z": 0.9238795325112867,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 16,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.0,
+        "y": 0.9238795325112867,
+        "z": 0.3826834323650898,
+        "w": 0.0
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": -180.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 17,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.3826834323650898,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.9238795325112867
+      },
+      "approach_rpy": {
+        "roll": 45.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "grasp_point_id": 9,
+      "direction_id": 18,
+      "grasp_candidate_position": {
+        "x": 0.049917408238101736,
+        "y": -0.006785542708005753,
+        "z": 0.0
+      },
+      "approach_quaternion": {
+        "x": 0.9238795325112867,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 0.3826834323650898
+      },
+      "approach_rpy": {
+        "roll": 135.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    }
+  ]
+}
