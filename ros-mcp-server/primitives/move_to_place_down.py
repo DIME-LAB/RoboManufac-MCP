@@ -1,3 +1,11 @@
+import sys
+import os
+
+# Add project root to path so primitives package can be imported when running directly
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 import rclpy
 from rclpy.node import Node
 from control_msgs.action import FollowJointTrajectory
@@ -8,8 +16,6 @@ from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import JointState
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 import numpy as np
-import sys
-import os
 import argparse
 import yaml
 from pathlib import Path
@@ -21,20 +27,18 @@ config_path = Path(__file__).parent.parent / "SERVER_PATHS_CFGS.yaml"
 with open(config_path, "r") as f:
     yaml_cfg = Box(yaml.safe_load(f))
 
+<<<<<<<< HEAD:ros-mcp-server/primitives/move_to_place_down.py
 # Add custom libraries to Python path
 custom_lib_path = yaml_cfg.ros_paths.custom_lib_path
 if custom_lib_path not in sys.path:
     sys.path.append(custom_lib_path)
+========
+from primitives.utils.ik_solver import ik_objective_quaternion, forward_kinematics, dh_params
+>>>>>>>> 91df9f5 (refactor: major cleanup - remove YOLOE/visual servo, reorganize primitives):ros-mcp-server/primitives/move_to_clear_area.py
 
-try:
-    from ik_solver import ik_objective_quaternion, forward_kinematics, dh_params
-except ImportError as e:
-    print(f"Failed to import IK solver: {e}")
-    sys.exit(1)
-
-class MoveToClearSpace(Node):
+class MoveToClearArea(Node):
     def __init__(self, mode='move'):
-        super().__init__('move_to_clear_space')
+        super().__init__('move_to_clear_area')
         self.mode = mode  # 'move' or 'hover'
         self.joint_names = [
             "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
@@ -230,7 +234,7 @@ class MoveToClearSpace(Node):
         if self.mode == 'hover':
             # Hover mode: Use same approach as move_home - use compute_ik with RPY [0, 180, 0]
             # Import compute_ik for hover mode
-            from ik_solver import compute_ik, rpy_to_matrix
+            from primitives.utils.ik_solver import compute_ik, rpy_to_matrix
             
             # Calculate TCP position from gripper center position using offset calculation
             # Same approach as move mode - use rotation matrix to get gripper Z-axis
@@ -508,7 +512,7 @@ def main(args=None):
         mode = 'move'  # Default mode
     
     rclpy.init()
-    node = MoveToClearSpace(mode=mode)
+    node = MoveToClearArea(mode=mode)
     rclpy.spin(node)
 
 if __name__ == '__main__':

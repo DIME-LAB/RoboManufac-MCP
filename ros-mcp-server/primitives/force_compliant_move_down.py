@@ -14,9 +14,17 @@ Alignment Phase (after contact detected via Z force threshold):
 - Ideal for peg-in-hole insertion tasks
 
 Usage:
-    python3 force_compliant_move_down.py
-    python3 force_compliant_move_down.py --speed 0.01 --z-threshold -10.0
+    python3 perform_insert.py
+    python3 perform_insert.py --speed 0.01 --z-threshold -10.0
 """
+
+import sys
+import os
+
+# Add project root to path so primitives package can be imported when running directly
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 import rclpy
 from rclpy.node import Node
@@ -36,7 +44,12 @@ from pathlib import Path
 from box import Box
 import yaml
 
-from ik_solver import compute_ik, ik_objective_quaternion
+# Try to import from utils first (new structure), fallback to direct import (old structure)
+try:
+    from primitives.utils.ik_solver import compute_ik, ik_objective_quaternion
+except ImportError:
+    # Fallback to direct import if utils structure doesn't exist
+    from ik_solver import compute_ik, ik_objective_quaternion
 from scipy.optimize import minimize
 from tf2_msgs.msg import TFMessage
 import json
@@ -100,10 +113,13 @@ config_path = Path(__file__).parent.parent / "SERVER_PATHS_CFGS.yaml"
 with open(config_path, "r") as f:
     yaml_cfg = Box(yaml.safe_load(f))
 
-# IK Solver
-IK_SOLVER_PATH = yaml_cfg.ros_paths.custom_lib_path
-if IK_SOLVER_PATH not in sys.path:
-    sys.path.append(IK_SOLVER_PATH)
+# IK Solver - try to add to path if not using utils structure
+try:
+    from primitives.utils.ik_solver import compute_ik
+except ImportError:
+    IK_SOLVER_PATH = yaml_cfg.ros_paths.custom_lib_path
+    if IK_SOLVER_PATH not in sys.path:
+        sys.path.append(IK_SOLVER_PATH)
 
 ASSEMBLY_DATA_DIR = f"{yaml_cfg.aruco_annot_path}/data"
 ASSEMBLY_JSON_FILE = f"{yaml_cfg.aruco_annot_path}/data/fmb_assembly.json"
@@ -111,13 +127,14 @@ ASSEMBLY_JSON_FILE = f"{yaml_cfg.aruco_annot_path}/data/fmb_assembly.json"
 
 class ForceCompliantMoveDownController(Node):
     """
+    Performs insert operation with force compliance.
     Moves down continuously with fixed orientation.
     Adjusts X and Y positions based on force compliance.
     Z-direction moves down regardless of force.
     """
     
     def __init__(self, mode=None, speed=0.005, gain=1.67, deadband=1.0, max_vel=15.0, reverse=False, z_threshold=-10.0, xy_force_threshold=1.0, object_name=None, base_name=None):
-        super().__init__('force_compliant_move_down_controller')
+        super().__init__('perform_insert_controller')
         
         # Mode must be explicitly specified
         if mode is None:
@@ -1276,19 +1293,19 @@ def main():
         epilog="""
 Examples:
   # Real mode with defaults
-  python3 force_compliant_move_down.py --mode real
+  python3 perform_insert.py --mode real
 
   # Sim mode (step 2 from translate_for_assembly)
-  python3 force_compliant_move_down.py --mode sim --object-name fork_orange --base-name base
+  python3 perform_insert.py --mode sim --object-name fork_orange --base-name base
 
   # Real mode with custom speed and compliance parameters
-  python3 force_compliant_move_down.py --mode real --speed 0.01 --gain 5.0 --deadband 3.0
+  python3 perform_insert.py --mode real --speed 0.01 --gain 5.0 --deadband 3.0
 
   # Real mode: Reverse force response directions
-  python3 force_compliant_move_down.py --mode real --reverse
+  python3 perform_insert.py --mode real --reverse
 
   # Real mode: Peg-in-hole insertion with custom Z threshold
-  python3 force_compliant_move_down.py --mode real --z-threshold -8.0
+  python3 perform_insert.py --mode real --z-threshold -8.0
         """
     )
     parser.add_argument('--mode', type=str, required=True, choices=['sim', 'real'],

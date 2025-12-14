@@ -11,6 +11,14 @@ The algorithm:
 Note: This is step 1 only. Step 2 (moving down to final position+force feedback) is handled separately.
 """
 
+import sys
+import os
+
+# Add project root to path so primitives package can be imported when running directly
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 import rclpy
 from rclpy.node import Node
 from tf2_msgs.msg import TFMessage
@@ -26,8 +34,6 @@ from scipy.spatial.transform import Rotation as R
 from scipy.optimize import minimize
 import argparse
 import time
-import sys
-import os
 import glob
 import yaml
 from pathlib import Path
@@ -39,16 +45,19 @@ config_path = Path(__file__).parent.parent / "SERVER_PATHS_CFGS.yaml"
 with open(config_path, "r") as f:
     yaml_cfg = Box(yaml.safe_load(f))
 
-# Add custom libraries to Python path for IK solver
-custom_lib_path = yaml_cfg.ros_paths.custom_lib_path
-if custom_lib_path not in sys.path:
-    sys.path.append(custom_lib_path)
-
+# Try to import from utils first (new structure), fallback to direct import (old structure)
 try:
-    from ik_solver import ik_objective_quaternion, forward_kinematics, dh_params
-except ImportError as e:
-    print(f"Failed to import IK solver: {e}")
-    sys.exit(1)
+    from primitives.utils.ik_solver import ik_objective_quaternion, forward_kinematics, dh_params
+except ImportError:
+    # Fallback to direct import if utils structure doesn't exist
+    custom_lib_path = yaml_cfg.ros_paths.custom_lib_path
+    if custom_lib_path not in sys.path:
+        sys.path.append(custom_lib_path)
+    try:
+        from ik_solver import ik_objective_quaternion, forward_kinematics, dh_params
+    except ImportError as e:
+        print(f"Failed to import IK solver: {e}")
+        sys.exit(1)
 
 # Configuration - use YAML config for paths
 ASSEMBLY_DATA_DIR = f"{yaml_cfg.aruco_annot_path}/data"
