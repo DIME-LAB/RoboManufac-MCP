@@ -2,34 +2,10 @@
     "version": "1.0",
     "file_records": [
         {
-            "source_url": "omniverse://localhost/Library/DT demo/aruco_fmb/base.usd",
-            "source_hash": "sha-256-flat;1048576;9186afe6d3a928355a8245c464ad95894f268ab7ba798dd8b571aead52fc9141",
-            "target_url": "./base.usd",
-            "target_hash": "sha-256-flat;1048576;c323087a1e4ac76044e3a5495767ac1133e5d2c2ea31992d2a7833d00f051200"
-        },
-        {
-            "source_url": "/home/aaugus11/Projects/aruco-grasp-annotator/data/aruco/pngs/aruco_marker_024.png",
-            "source_hash": "18031346caec2fda7073df7ffe70badb4eb4254a",
-            "target_url": "./home/aaugus11/Projects/aruco-grasp-annotator/data/aruco/pngs/aruco_marker_024.png",
-            "target_hash": "sha-256-flat;1048576;4b5f79b0dfdcd74c47627f1a6e4a7b8294d74d1ea49681f5c9f50ac6ab39406e"
-        },
-        {
-            "source_url": "/home/aaugus11/Projects/aruco-grasp-annotator/data/aruco/pngs/aruco_marker_025.png",
-            "source_hash": "396e4a36452452c370d5b921e1241a977dad8e84",
-            "target_url": "./home/aaugus11/Projects/aruco-grasp-annotator/data/aruco/pngs/aruco_marker_025.png",
-            "target_hash": "sha-256-flat;1048576;5746ab7ff5c79b66aa6eeeb13d0cab78063010dfaa8a26ca51d337702338f94a"
-        },
-        {
-            "source_url": "/home/aaugus11/Projects/aruco-grasp-annotator/data/aruco/pngs/aruco_marker_026.png",
-            "source_hash": "ca07b3530d73f40f16909d0c68f8de5db2a95c2b",
-            "target_url": "./home/aaugus11/Projects/aruco-grasp-annotator/data/aruco/pngs/aruco_marker_026.png",
-            "target_hash": "sha-256-flat;1048576;0d33ddc29392e95330c6fe8cee5f7831248ebb7b1fd687fe276bed06c1081efb"
-        },
-        {
-            "source_url": "/home/aaugus11/Projects/aruco-grasp-annotator/data/aruco/pngs/aruco_marker_027.png",
-            "source_hash": "1c396ee529c9a17af51e2b7153d5a677248263ef",
-            "target_url": "./home/aaugus11/Projects/aruco-grasp-annotator/data/aruco/pngs/aruco_marker_027.png",
-            "target_hash": "sha-256-flat;1048576;dd08261de76437066358c8b1e32f1707cb47a6df04e481fd981e7c3c5f99853b"
+            "source_url": "omniverse://localhost/Library/DT demo/fmb/base3.usd",
+            "source_hash": "sha-256-flat;1048576;5dfd1917fa5bdcbeb1f4d5c6e12cf1ba2952eb63dfa3a01a01e30bfb56ca041b",
+            "target_url": "./base3.usd",
+            "target_hash": "sha-256-flat;1048576;26c25c04294cfa3d2c402dd6b77a3f63b0fb730ce32d76d5c50ecbab30b5028b"
         },
         {
             "source_url": "omniverse://localhost/NVIDIA/Materials/Base/Plastics/Plastic.mdl",
