@@ -13,9 +13,10 @@
       "disabled": false,
       "timeout": 60,
       "type": "stdio",
-      "command": "/home/abhara13/mambaforge/envs/ollama/bin/python",
+      "command": "bash",
       "args": [
-        "/home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/ros-mcp-server/server.py"
+        "-c",
+        "source /opt/ros/humble/setup.bash && /home/abhara13/mambaforge/envs/ollama/bin/python /home/abhara13/Desktop/MCP-UNIFIED/RoboManufac-MCP/ros-mcp-server/server.py"
       ]
     },
     "Prompts": {
