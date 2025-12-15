@@ -308,33 +308,38 @@ def execute_script(ctx: Context, code: str) -> str:
 
     
 @mcp.tool()
-def list_prims() -> str:
+def list_prims(path: str = "/World/Objects") -> str:
     """
-    List all prim paths in the current USD scene.
+    List only the direct children of the specified path (default: /World/Objects).
     Useful for discovering available objects before moving, reading poses, or other operations.
+    
+    Args:
+        path: The prim path to list children from (default: "/World/Objects")
     
     Example:
         list_prims()
+        list_prims("/World/Objects")
+        list_prims("/World")
     """
     try:
         isaac = get_isaac_connection()
-        result = isaac.send_command("list_prims")
+        result = isaac.send_command("list_prims", {"path": path})
         
         if result.get("status") == "success":
             prims = result.get("prims", [])
             
-            response = f"Prims in scene ({len(prims)}):\n\n"
+            response = f"Direct children of {path} ({len(prims)}):\n\n"
             
             for prim in prims:
-                path = prim['path']
+                prim_path = prim['path']
                 name = prim['name']
                 prim_type = prim['type']
                 
                 # Format: path (type) or path [name] (type) if name differs
-                if name and name != path.split('/')[-1]:
-                    response += f"{path} [{name}] ({prim_type})\n"
+                if name and name != prim_path.split('/')[-1]:
+                    response += f"{prim_path} [{name}] ({prim_type})\n"
                 else:
-                    response += f"{path} ({prim_type})\n"
+                    response += f"{prim_path} ({prim_type})\n"
             
             return response
         else:
@@ -406,12 +411,12 @@ def save_scene_state(object_names: list, json_file_path: str = None) -> str:
     3. Then use restore_scene_state() to restore the objects to their previously saved poses
     
     Args:
-        object_names: List of object names (e.g., ["fork_orange", "line_red", "base"])
+        object_names: List of object names to save (e.g., ["object1", "object2", "object3"])
         json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
     
     Example:
-        save_scene_state(["fork_orange", "line_red", "base"])
-        save_scene_state(["fork_orange", "line_red", "base"], "verified_state.json")
+        save_scene_state(["object1", "object2", "object3"])
+        save_scene_state(["object1", "object2"], "verified_state.json")
     """
     try:
         isaac = get_isaac_connection()
@@ -455,12 +460,12 @@ def restore_scene_state(object_names: list, json_file_path: str = None) -> str:
     3. Then use restore_scene_state() to restore the objects to their previously saved poses
     
     Args:
-        object_names: List of object names to restore (e.g., ["fork_orange", "line_red", "base"])
+        object_names: List of object names to restore (e.g., ["object1", "object2", "object3"])
         json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
     
     Example:
-        restore_scene_state(["fork_orange", "line_red", "base"])
-        restore_scene_state(["fork_orange", "line_red", "base"], "verified_state.json")
+        restore_scene_state(["object1", "object2", "object3"])
+        restore_scene_state(["object1", "object2"], "verified_state.json")
     """
     try:
         isaac = get_isaac_connection()
@@ -490,7 +495,7 @@ def restore_scene_state(object_names: list, json_file_path: str = None) -> str:
 
 
 @mcp.tool()
-def read_scene_state(json_file_path: str = None) -> str:
+def read_scene_state(json_file_path: str) -> str:
     """
     Read scene state (object poses) from a JSON file without applying them.
     
@@ -498,11 +503,11 @@ def read_scene_state(json_file_path: str = None) -> str:
     Useful for checking what poses were saved before restoring.
     
     Args:
-        json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
+        json_file_path: Path to the JSON file (required)
     
     Example:
-        read_scene_state()
         read_scene_state("verified_state.json")
+        read_scene_state("object_poses.json")
     """
     try:
         isaac = get_isaac_connection()
@@ -541,6 +546,67 @@ def read_scene_state(json_file_path: str = None) -> str:
 
 
 @mcp.tool()
+def list_scene_states(directory: str = None) -> str:
+    """
+    List all available scene state JSON files in a directory.
+    
+    This tool helps you discover available scene state files that were previously saved.
+    Use this to find the exact filename before using read_scene_state() or restore_scene_state().
+    
+    By default, scans the current working directory (same location where save_scene_state saves files
+    when using a simple filename like "object_poses.json"). If you saved files to a specific directory,
+    provide that same directory path here.
+    
+    Args:
+        directory: Optional directory path to search for scene state files. 
+                   If None, scans the current working directory (same as save_scene_state default location)
+    
+    Example:
+        # List files in current directory (where save_scene_state saves by default)
+        list_scene_states()
+        
+        # List files in a specific directory
+        list_scene_states("./states")
+        list_scene_states("states")
+    """
+    try:
+        isaac = get_isaac_connection()
+        result = isaac.send_command("list_scene_states", {
+            "directory": directory
+        })
+        
+        if result.get("status") == "success":
+            files = result.get("files", [])
+            file_count = result.get("file_count", 0)
+            
+            response = f"Available scene state files ({file_count}):\n\n"
+            
+            if files:
+                for file_info in files:
+                    filename = file_info.get("filename", "unknown")
+                    file_path = file_info.get("path", filename)
+                    object_count = file_info.get("object_count", 0)
+                    object_names = file_info.get("object_names", [])
+                    
+                    response += f"{filename}\n"
+                    response += f"  Path: {file_path}\n"
+                    response += f"  Objects: {object_count}"
+                    if object_names:
+                        response += f" ({', '.join(object_names)})"
+                    response += "\n\n"
+            else:
+                response += "No scene state files found.\n"
+            
+            return response
+        else:
+            return f"Error: {result.get('message', 'Unknown error')}"
+            
+    except Exception as e:
+        logger.error(f"Error in list_scene_states: {str(e)}")
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
 def clear_scene_state(object_names: list = None, json_file_path: str = None, clear_all: bool = False) -> str:
     """
     Clear/delete object poses from a JSON file.
@@ -548,14 +614,14 @@ def clear_scene_state(object_names: list = None, json_file_path: str = None, cle
     This tool allows you to remove specific objects from the saved JSON file, or delete the entire file.
     
     Args:
-        object_names: Optional list of object names to remove (e.g., ["fork_orange", "line_red"]). 
+        object_names: Optional list of object names to remove (e.g., ["object1", "object2"]). 
                       If None or empty and clear_all=False, removes all objects.
         json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
         clear_all: If True, deletes the entire JSON file. If False, removes specified objects.
     
     Examples:
         # Remove specific objects
-        clear_scene_state(["fork_orange", "line_red"])
+        clear_scene_state(["object1", "object2"])
         
         # Remove all objects (clears the file)
         clear_scene_state()
@@ -564,7 +630,7 @@ def clear_scene_state(object_names: list = None, json_file_path: str = None, cle
         clear_scene_state(clear_all=True)
         
         # Clear specific file
-        clear_scene_state(["base"], "verified_state.json")
+        clear_scene_state(["object1"], "verified_state.json")
     """
     try:
         isaac = get_isaac_connection()
@@ -595,44 +661,6 @@ def clear_scene_state(object_names: list = None, json_file_path: str = None, cle
     except Exception as e:
         logger.error(f"Error in clear_scene_state: {str(e)}")
         return f"Error: {str(e)}"
-
-
-@mcp.tool()
-def import_usd(usd_path: str, prim_path: str = None, position: list = None, orientation: list = None, orientation_format: str = "degrees") -> str:
-    """
-    Import a USD file as a prim into the Isaac Sim stage with flexible orientation input.
-    
-    Args:
-        usd_path: Path to the USD file (local or Omniverse path)
-        prim_path: Target prim path (optional, auto-generated if not provided)
-        position: [x, y, z] position coordinates (optional, defaults to [0, 0, 0])
-        orientation: Orientation values (optional, defaults to [0, 0, 0])
-        orientation_format: Format of orientation input - "degrees", "radians", or "quaternion"
-    
-    Examples:
-        import_usd("omniverse://localhost/Library/Aruco/objs/base_0.usd")
-        import_usd("omniverse://localhost/Library/Aruco/objs/base_0.usd", position=[1.0, 2.0, 0.0], orientation=[0, 0, 45], orientation_format="degrees")
-        import_usd("omniverse://localhost/Library/Aruco/objs/base_0.usd", orientation=[0, 0, 0.785], orientation_format="radians")  
-        import_usd("omniverse://localhost/Library/Aruco/objs/base_0.usd", orientation=[1, 0, 0, 0], orientation_format="quaternion")
-    """
-    try:
-        # Use the existing connection pattern like other tools
-        isaac = get_isaac_connection()
-        
-        result = isaac.send_command("import_usd", {
-            "usd_path": usd_path,
-            "prim_path": prim_path,
-            "position": position,
-            "orientation": orientation,
-            "orientation_format": orientation_format
-        })
-        
-        return f"Successfully imported USD: {result.get('message', '')}, prim path: {result.get('prim_path', '')}, position: {result.get('position', [0, 0, 0])}, orientation: {result.get('orientation', [0, 0, 0])} ({result.get('orientation_format', 'degrees')})"
-        
-    except Exception as e:
-        logger.error(f"Error importing USD: {str(e)}")
-        return f"Error importing USD: {str(e)}"
-
 
 
 @mcp.tool()

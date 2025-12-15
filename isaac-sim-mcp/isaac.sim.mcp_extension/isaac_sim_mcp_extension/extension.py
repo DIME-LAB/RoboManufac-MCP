@@ -287,7 +287,6 @@ class MCPExtension(omni.ext.IExt):
         handlers = {
             "execute_script": self.execute_script,
             "list_prims": self.list_prims,
-            "import_usd": self.import_usd,
             "get_object_info": self.get_object_info,
             "move_prim": self.move_prim,
             "stop_scene": self.stop_scene,
@@ -295,6 +294,7 @@ class MCPExtension(omni.ext.IExt):
             "save_scene_state": self.save_scene_state,
             "restore_scene_state": self.restore_scene_state,
             "read_scene_state": self.read_scene_state,
+            "list_scene_states": self.list_scene_states,
             "clear_scene_state": self.clear_scene_state,
         }
         
@@ -363,31 +363,42 @@ class MCPExtension(omni.ext.IExt):
             }
         
 
-    def list_prims(self) -> Dict[str, Any]:
-        """List all prim paths in the current USD scene."""
+    def list_prims(self, path: str = "/World/Objects") -> Dict[str, Any]:
+        """List only the direct children of the specified path (default: /World/Objects)."""
         try:
             import omni.usd
+            from pxr import Usd, UsdGeom
             
             stage = omni.usd.get_context().get_stage()
             if not stage:
                 return {
                     "status": "error",
-                    "message": "No active stage found"
+                    "message": "No stage is currently open"
                 }
             
-            # Collect all prims
+            objects_prim = stage.GetPrimAtPath(path)
+            if not objects_prim.IsValid():
+                return {
+                    "status": "error",
+                    "message": f"{path} path does not exist"
+                }
+            
+            # Get only direct children
+            children = objects_prim.GetChildren()
+            
+            # Collect direct children prims
             prims_list = []
-            for prim in stage.Traverse():
+            for child in children:
                 prim_info = {
-                    "path": str(prim.GetPath()),
-                    "name": prim.GetName(),
-                    "type": prim.GetTypeName()
+                    "path": str(child.GetPath()),
+                    "name": child.GetName(),
+                    "type": child.GetTypeName()
                 }
                 prims_list.append(prim_info)
             
             return {
                 "status": "success",
-                "message": f"Found {len(prims_list)} prims in scene",
+                "message": f"Found {len(prims_list)} direct children in {path}",
                 "prims": prims_list,
                 "total_count": len(prims_list)
             }
@@ -395,7 +406,7 @@ class MCPExtension(omni.ext.IExt):
         except Exception as e:
             return {
                 "status": "error",
-                "message": f"Failed to list prims: {str(e)}"
+                "message": f"Error: {str(e)}"
             }
 
     def stop_scene(self) -> Dict[str, Any]:
@@ -472,172 +483,6 @@ class MCPExtension(omni.ext.IExt):
                 "message": f"Failed to play scene: {str(e)}",
                 "traceback": traceback.format_exc()
             }
-
-    def import_usd(self, usd_path: str, prim_path: str = None, position: List[float] = None, orientation: List[float] = None, orientation_format: str = "degrees") -> Dict[str, Any]:
-        """Import a USD file as a prim into the Isaac Sim stage with flexible orientation input."""
-        try:
-            import os
-            from omni.isaac.core.utils.stage import add_reference_to_stage
-            from pxr import Usd, UsdGeom, Gf
-            import numpy as np
-            from omni.isaac.core.utils.numpy.rotations import euler_angles_to_quats
-            import omni.usd
-            import time
-            
-            # Auto-generate prim path from filename if not provided
-            if prim_path is None:
-                filename = os.path.splitext(os.path.basename(usd_path))[0]
-                prim_path = f"/World/{filename}"
-                
-                # Make sure prim path is unique
-                stage = omni.usd.get_context().get_stage()
-                counter = 1
-                original_path = prim_path
-                while stage.GetPrimAtPath(prim_path).IsValid():
-                    prim_path = f"{original_path}_{counter}"
-                    counter += 1
-            
-            # Import USD file first
-            print(f"Importing USD from {usd_path} to {prim_path}")
-            add_reference_to_stage(usd_path=usd_path, prim_path=prim_path)
-            
-            # Wait for the prim to be fully created
-            max_attempts = 10
-            attempt = 0
-            stage = omni.usd.get_context().get_stage()
-            prim = None
-            
-            while attempt < max_attempts:
-                prim = stage.GetPrimAtPath(prim_path)
-                if prim.IsValid():
-                    print(f"Prim found at {prim_path} after {attempt} attempts")
-                    break
-                print(f"Waiting for prim creation, attempt {attempt + 1}")
-                time.sleep(0.1)
-                attempt += 1
-            
-            if not prim or not prim.IsValid():
-                return {
-                    "status": "error",
-                    "message": f"Prim at {prim_path} not found after import. Import may have failed."
-                }
-            
-            # Apply default values if not provided
-            if position is None:
-                position = [0.0, 0.0, 0.0]
-            
-            if orientation is None:
-                orientation = [0.0, 0.0, 0.0]
-                orientation_format = "degrees"
-            
-            # Make sure prim is transformable
-            if not prim.IsA(UsdGeom.Xformable):
-                xform = UsdGeom.Xform.Define(stage, prim_path)
-                print(f"Converted prim to Xformable")
-            else:
-                xform = UsdGeom.Xform(prim)
-            
-            # CRITICAL: Detect existing orient operation precision BEFORE clearing (same as move_prim)
-            existing_orient_precision = None
-            existing_ops = xform.GetOrderedXformOps()
-            for op in existing_ops:
-                if op.GetOpType() == UsdGeom.XformOp.TypeOrient:
-                    # Get the precision from existing operation
-                    if "quatd" in str(op.GetAttr().GetTypeName()):
-                        existing_orient_precision = UsdGeom.XformOp.PrecisionDouble
-                        print("Detected existing double precision quaternion")
-                    elif "quatf" in str(op.GetAttr().GetTypeName()):
-                        existing_orient_precision = UsdGeom.XformOp.PrecisionFloat
-                        print("Detected existing float precision quaternion")
-                    break
-            
-            # Clear and recreate with matching precision (same as move_prim)
-            xform.ClearXformOpOrder()
-            
-            # Apply translation (always double precision for position)
-            position_vec = Gf.Vec3d(position[0], position[1], position[2])
-            xform.AddTranslateOp().Set(position_vec)
-            
-            # Handle orientation conversion (same logic as move_prim)
-            if orientation_format.lower() == "quaternion" and len(orientation) == 4:
-                final_quaternion = orientation
-                print(f"Using quaternion orientation: {orientation}")
-            elif orientation_format.lower() == "radians" and len(orientation) == 3:
-                rpy_rad = np.array(orientation)
-                quat_xyzw = euler_angles_to_quats(rpy_rad)
-                final_quaternion = [quat_xyzw[0], quat_xyzw[1], quat_xyzw[2], quat_xyzw[3]]  # w,x,y,z
-                print(f"Converted radian orientation {orientation} to quaternion {final_quaternion}")
-            else:
-                # Default: Input is RPY in degrees
-                rpy_deg = np.array(orientation)
-                rpy_rad = np.deg2rad(rpy_deg)
-                quat_xyzw = euler_angles_to_quats(rpy_rad)
-                final_quaternion = [quat_xyzw[0], quat_xyzw[1], quat_xyzw[2], quat_xyzw[3]]  # w,x,y,z
-                print(f"Converted degree orientation {orientation} to quaternion {final_quaternion}")
-            
-            # Apply rotation with MATCHING precision (this is the key fix!)
-            if existing_orient_precision == UsdGeom.XformOp.PrecisionFloat:
-                quat = Gf.Quatf(final_quaternion[0], final_quaternion[1], final_quaternion[2], final_quaternion[3])
-                orient_op = xform.AddOrientOp(UsdGeom.XformOp.PrecisionFloat)
-                print("Using float precision for quaternion")
-            else:
-                quat = Gf.Quatd(final_quaternion[0], final_quaternion[1], final_quaternion[2], final_quaternion[3])
-                orient_op = xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble)
-                print("Using double precision for quaternion")
-            
-            orient_op.Set(quat)
-            
-            print(f"Successfully imported and positioned {prim_path}")
-            print(f"Final position: {position}")
-            print(f"Final orientation: {orientation} ({orientation_format})")
-            
-            # Verify the transform was applied by reading it back
-            try:
-                translate_attr = prim.GetAttribute("xformOp:translate")
-                orient_attr = prim.GetAttribute("xformOp:orient")
-                
-                actual_position = [0, 0, 0]
-                actual_quaternion = [1, 0, 0, 0]
-                
-                if translate_attr.IsValid():
-                    translate_value = translate_attr.Get()
-                    if translate_value:
-                        actual_position = [float(translate_value[0]), float(translate_value[1]), float(translate_value[2])]
-                
-                if orient_attr.IsValid():
-                    orient_value = orient_attr.Get()
-                    if orient_value:
-                        actual_quaternion = [float(orient_value.GetReal()), float(orient_value.GetImaginary()[0]), 
-                                        float(orient_value.GetImaginary()[1]), float(orient_value.GetImaginary()[2])]
-                
-                print(f"Verified - Actual position: {actual_position}")
-                print(f"Verified - Actual quaternion: {actual_quaternion}")
-                
-            except Exception as e:
-                print(f"Could not verify transform: {str(e)}")
-            
-            return {
-                "status": "success",
-                "message": f"Successfully imported USD file at {prim_path} with position {position} and orientation {orientation} ({orientation_format})",
-                "usd_path": usd_path,
-                "prim_path": prim_path,
-                "final_position": position,
-                "final_orientation": orientation,
-                "orientation_format": orientation_format
-            }
-            
-        except Exception as e:
-            import traceback
-            print(f"Error in import_usd: {str(e)}")
-            traceback.print_exc()
-            return {
-                "status": "error",
-                "message": f"Failed to import USD file: {str(e)}",
-                "usd_path": usd_path,
-                "prim_path": prim_path,
-                "traceback": traceback.format_exc()
-            }
-
 
     def get_object_info(self, prim_path: str) -> Dict[str, Any]:
         """Get comprehensive object information including pose using direct USD attribute access."""
@@ -1144,6 +989,90 @@ class MCPExtension(omni.ext.IExt):
             return {
                 "status": "error",
                 "message": f"Failed to read scene state: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def list_scene_states(self, directory: str = None) -> Dict[str, Any]:
+        """List all available scene state JSON files in a directory.
+        
+        Args:
+            directory: Optional directory path to search for scene state files.
+                       If None, scans the current working directory (same as save_scene_state default location)
+            
+        Returns:
+            Dictionary with list of found scene state files and their metadata.
+        """
+        try:
+            import os
+            import glob
+            
+            # Default to current directory if not provided (same as save_scene_state default)
+            if directory is None:
+                directory = "."
+            
+            # Check if directory exists
+            if not os.path.exists(directory):
+                return {
+                    "status": "error",
+                    "message": f"Directory not found: {directory}"
+                }
+            
+            if not os.path.isdir(directory):
+                return {
+                    "status": "error",
+                    "message": f"Path is not a directory: {directory}"
+                }
+            
+            # Find all JSON files in the directory
+            json_pattern = os.path.join(directory, "*.json")
+            json_files = glob.glob(json_pattern)
+            
+            files_info = []
+            
+            # Read each JSON file to extract metadata
+            for json_file_path in json_files:
+                try:
+                    # Read the JSON file
+                    with open(json_file_path, 'r') as f:
+                        poses = json.load(f)
+                    
+                    # Extract metadata
+                    object_count = len(poses)
+                    object_names = list(poses.keys())
+                    
+                    # Get just the filename
+                    filename = os.path.basename(json_file_path)
+                    
+                    files_info.append({
+                        "filename": filename,
+                        "path": json_file_path,
+                        "object_count": object_count,
+                        "object_names": object_names
+                    })
+                    
+                except json.JSONDecodeError:
+                    # Skip invalid JSON files (they might not be scene state files)
+                    continue
+                except Exception as e:
+                    # Skip files that can't be read
+                    print(f"⚠ Could not read {json_file_path}: {str(e)}")
+                    continue
+            
+            return {
+                "status": "success",
+                "message": f"Found {len(files_info)} scene state file(s) in {directory}",
+                "directory": directory,
+                "file_count": len(files_info),
+                "files": files_info
+            }
+                
+        except Exception as e:
+            carb.log_error(f"Error in list_scene_states: {e}")
+            import traceback
+            carb.log_error(traceback.format_exc())
+            return {
+                "status": "error",
+                "message": f"Failed to list scene states: {str(e)}",
                 "traceback": traceback.format_exc()
             }
 
