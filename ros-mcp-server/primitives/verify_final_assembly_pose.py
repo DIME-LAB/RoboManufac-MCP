@@ -22,19 +22,12 @@ import time
 import sys
 import os
 import glob
-import yaml
-from pathlib import Path
-from box import Box
+from primitives.utils.data_path_finder import get_assembly_data_dir, get_symmetry_dir
 
-
-# Configs containing paths of ROS and other related filepaths
-config_path = Path(__file__).parent.parent / "SERVER_PATHS_CFGS.yaml"
-with open(config_path, "r") as f:
-    yaml_cfg = Box(yaml.safe_load(f))
-
-# Configuration
-ASSEMBLY_JSON_FILE = f"{yaml_cfg.aruco_annot_path}/data/fmb_assembly.json"
-SYMMETRY_DIR = f"{yaml_cfg.aruco_annot_path}/data/symmetry"
+# Configuration (auto-discovered)
+ASSEMBLY_DATA_DIR = get_assembly_data_dir()
+ASSEMBLY_JSON_FILE = str(ASSEMBLY_DATA_DIR / "fmb_assembly.json")
+SYMMETRY_DIR = str(get_symmetry_dir())
 BASE_TOPIC = "/objects_poses_sim"
 OBJECT_TOPIC = "/objects_poses_sim"
 EE_TOPIC = "/tcp_pose_broadcaster/pose"

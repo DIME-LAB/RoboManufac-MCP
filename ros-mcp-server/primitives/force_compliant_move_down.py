@@ -39,26 +39,17 @@ from scipy.spatial.transform import Rotation as R
 import numpy as np
 import time
 import argparse
-import sys
-from pathlib import Path
-from box import Box
-import yaml
-
-# Try to import from utils first (new structure), fallback to direct import (old structure)
-try:
-    from primitives.utils.ik_solver import compute_ik, ik_objective_quaternion
-except ImportError:
-    # Fallback to direct import if utils structure doesn't exist
-    from ik_solver import compute_ik, ik_objective_quaternion
+from primitives.utils.ik_solver import compute_ik, ik_objective_quaternion
 from scipy.optimize import minimize
 from tf2_msgs.msg import TFMessage
 import json
 import os
 import glob
+from primitives.utils.data_path_finder import get_assembly_data_dir
 
 
-# Configuration - use YAML config for paths
-# ASSEMBLY_DATA_DIR will be set after YAML config is loaded
+# Configuration (auto-discovered)
+ASSEMBLY_DATA_DIR = str(get_assembly_data_dir())
 
 
 def find_assembly_json_by_base_name(base_name, data_dir=ASSEMBLY_DATA_DIR, logger=None):
@@ -108,24 +99,7 @@ def find_assembly_json_by_base_name(base_name, data_dir=ASSEMBLY_DATA_DIR, logge
     return None
 
 
-# Configs containing paths of ROS and other related filepaths
-config_path = Path(__file__).parent.parent / "SERVER_PATHS_CFGS.yaml"
-with open(config_path, "r") as f:
-    yaml_cfg = Box(yaml.safe_load(f))
-
-# IK Solver - try to add to path if not using utils structure
-try:
-    from primitives.utils.ik_solver import compute_ik
-except ImportError:
-    IK_SOLVER_PATH = yaml_cfg.ros_paths.custom_lib_path
-    if IK_SOLVER_PATH not in sys.path:
-        sys.path.append(IK_SOLVER_PATH)
-
-ASSEMBLY_DATA_DIR = f"{yaml_cfg.aruco_annot_path}/data"
-ASSEMBLY_JSON_FILE = f"{yaml_cfg.aruco_annot_path}/data/fmb_assembly.json"
-
-
-class ForceCompliantMoveDownController(Node):
+class PerformInsertController(Node):
     """
     Performs insert operation with force compliance.
     Moves down continuously with fixed orientation.
@@ -150,14 +124,13 @@ class ForceCompliantMoveDownController(Node):
                 raise ValueError("In sim mode, object_name and base_name are required")
             self.object_name = object_name
             self.base_name = base_name
-            # Find and load assembly config for sim mode based on base_name (dynamic lookup)
+            # Find and load assembly config for sim mode based on base_name
             assembly_json_file = find_assembly_json_by_base_name(base_name, ASSEMBLY_DATA_DIR, self.get_logger())
             if assembly_json_file:
                 self.assembly_config = self.load_assembly_config(assembly_json_file)
             else:
-                # Fallback to default assembly file if dynamic lookup fails
-                self.get_logger().warn(f"Could not find assembly JSON for base '{base_name}', using default: {ASSEMBLY_JSON_FILE}")
-                self.assembly_config = self.load_assembly_config(ASSEMBLY_JSON_FILE)
+                self.get_logger().error(f"Could not find assembly JSON for base '{base_name}'")
+                self.assembly_config = {}
             # Subscribe to object poses topic
             self.current_poses = {}
             self.object_sub = self.create_subscription(TFMessage, "/objects_poses_sim", self.object_callback, 10)
@@ -1341,13 +1314,13 @@ Examples:
     
     try:
         if args.mode == 'sim':
-            node = ForceCompliantMoveDownController(
+            node = PerformInsertController(
                 mode=args.mode,
                 object_name=args.object_name,
                 base_name=args.base_name
             )
         else:
-            node = ForceCompliantMoveDownController(
+            node = PerformInsertController(
                 mode=args.mode,
                 speed=args.speed,
                 gain=args.gain,

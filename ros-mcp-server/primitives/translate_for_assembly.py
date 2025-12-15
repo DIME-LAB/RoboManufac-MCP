@@ -35,33 +35,12 @@ from scipy.optimize import minimize
 import argparse
 import time
 import glob
-import yaml
-from pathlib import Path
-from box import Box
 
+from primitives.utils.ik_solver import ik_objective_quaternion, forward_kinematics, dh_params
+from primitives.utils.data_path_finder import get_assembly_data_dir
 
-# Configs containing paths of ROS and other related filepaths
-config_path = Path(__file__).parent.parent / "SERVER_PATHS_CFGS.yaml"
-with open(config_path, "r") as f:
-    yaml_cfg = Box(yaml.safe_load(f))
-
-# Try to import from utils first (new structure), fallback to direct import (old structure)
-try:
-    from primitives.utils.ik_solver import ik_objective_quaternion, forward_kinematics, dh_params
-except ImportError:
-    # Fallback to direct import if utils structure doesn't exist
-    custom_lib_path = yaml_cfg.ros_paths.custom_lib_path
-    if custom_lib_path not in sys.path:
-        sys.path.append(custom_lib_path)
-    try:
-        from ik_solver import ik_objective_quaternion, forward_kinematics, dh_params
-    except ImportError as e:
-        print(f"Failed to import IK solver: {e}")
-        sys.exit(1)
-
-# Configuration - use YAML config for paths
-ASSEMBLY_DATA_DIR = f"{yaml_cfg.aruco_annot_path}/data"
-ASSEMBLY_JSON_FILE = f"{yaml_cfg.aruco_annot_path}/data/fmb_assembly.json"
+# Configuration (auto-discovered)
+ASSEMBLY_DATA_DIR = str(get_assembly_data_dir())
 BASE_TOPIC = "/objects_poses_sim"
 OBJECT_TOPIC = "/objects_poses_sim"
 EE_TOPIC = "/tcp_pose_broadcaster/pose"
