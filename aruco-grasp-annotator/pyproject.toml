@@ -49,7 +49,7 @@ grasp-points-annotator = "grasp_points_annotator.main:main"
 symmetry-exporter = "symmetry_exporter.main:main"
 
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=65.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

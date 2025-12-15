@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import numpy as np
 from scipy.spatial.transform import Rotation as R
-from .data_path_finder import get_aruco_data_dir
+from data_path_finder import get_aruco_data_dir
 
 
 class GraspPointsPublisher(Node):
