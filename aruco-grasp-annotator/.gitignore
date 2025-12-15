@@ -140,5 +140,4 @@ dmypy.json
 *.swo
 
 # Grasp Points - Generated outputs and temporary files
-src/grasp_points/outputs/
-src/grasp_points/masks/
+src/grasp_points_annotator/outputs/

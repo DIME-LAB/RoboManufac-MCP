@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import json
 import os
+import socket
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import uvicorn
@@ -81,7 +82,7 @@ async def read_root():
             }
             
             .sidebar {
-                width: 350px;
+                width: 500px;
                 background: rgba(255, 255, 255, 0.95);
                 backdrop-filter: blur(10px);
                 padding: 20px;
@@ -569,13 +570,6 @@ async def read_root():
                     </div>
                 </div>
                 
-                <div class="controls-panel">
-                    <h3>Scene Objects</h3>
-                    <div id="sceneObjects" class="scene-objects">
-                        <div class="loading" style="padding: 15px; font-size: 12px;">No objects in scene</div>
-                    </div>
-                </div>
-                
                 <div id="statusMessages"></div>
             </div>
             
@@ -624,8 +618,6 @@ async def read_root():
             let selectedObject = null;
             let gridVisible = true;
             let gridHelper, axesHelper;
-            let raycaster, mouse;
-            let isMouseDown = false;
             let graspPointsGroup = null;
             let graspPointsData = null;
             
@@ -639,7 +631,7 @@ async def read_root():
                 
                 // Camera setup
                 camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.001, 1000);
-                camera.position.set(0.5, -0.5, 0.5);  // Move camera to look at scene from Y-negative
+                camera.position.set(0.3, -0.3, 0.3);  // Move camera closer to scene
                 camera.up.set(0, 0, 1);  // Set Z as up vector
                 camera.lookAt(0, 0, 0);
                 
@@ -652,8 +644,7 @@ async def read_root():
                 
                 // Orbit Controls
                 controls = new THREE.OrbitControls(camera, renderer.domElement);
-                controls.enableDamping = true;
-                controls.dampingFactor = 0.05;
+                controls.enableDamping = false;  // Disable damping for immediate stop
                 controls.minDistance = 0.05;
                 controls.maxDistance = 5;
                 
@@ -706,10 +697,6 @@ async def read_root():
                 axesHelper = new THREE.LineSegments(axesGeometry, axesMaterial);
                 scene.add(axesHelper);
                 
-                // Raycaster for object selection
-                raycaster = new THREE.Raycaster();
-                mouse = new THREE.Vector2();
-                
                 // Event listeners
                 setupEventListeners();
                 
@@ -722,9 +709,7 @@ async def read_root():
             function setupEventListeners() {
                 const canvas = renderer.domElement;
                 
-                // Mouse events for object selection
-                canvas.addEventListener('mousedown', onMouseDown);
-                canvas.addEventListener('mouseup', onMouseUp);
+                // Prevent right-click context menu
                 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
                 
                 // Window resize
@@ -732,30 +717,6 @@ async def read_root():
                 
                 // Keyboard shortcuts
                 document.addEventListener('keydown', onKeyDown);
-            }
-            
-            function onMouseDown(event) {
-                isMouseDown = true;
-            }
-            
-            function onMouseUp(event) {
-                if (!isMouseDown) return;
-                isMouseDown = false;
-                
-                // Only process clicks, not drags
-                if (event.button === 0) { // Left click
-                    mouse.x = (event.clientX / renderer.domElement.clientWidth) * 2 - 1;
-                    mouse.y = -(event.clientY / renderer.domElement.clientHeight) * 2 + 1;
-                    
-                    raycaster.setFromCamera(mouse, camera);
-                    const intersects = raycaster.intersectObjects(sceneObjects);
-                    
-                    if (intersects.length > 0) {
-                        selectObject(intersects[0].object);
-                    } else {
-                        selectObject(null);
-                    }
-                }
             }
             
             function onKeyDown(event) {
@@ -868,6 +829,21 @@ async def read_root():
                 const component = loadedComponents[componentName];
                 if (!component) return;
                 
+                // Check if this component already exists in the scene
+                const existingObject = sceneObjects.find(obj => 
+                    obj.userData && 
+                    obj.userData.type === 'component' && 
+                    obj.userData.name === componentName
+                );
+                
+                if (existingObject) {
+                    // Component already exists - just select it
+                    selectObject(existingObject);
+                    updateStatus(`Selected existing ${component.display_name} in scene`);
+                    showMessage(`Selected ${component.display_name} (already in scene)`, "info");
+                    return;
+                }
+                
                 // Create wireframe geometry
                 const geometry = new THREE.BufferGeometry();
                 const vertices = new Float32Array(component.wireframe.vertices.flat());
@@ -889,7 +865,7 @@ async def read_root():
                 // Create material
                 const material = new THREE.LineBasicMaterial({ 
                     color: getComponentColor(componentName),
-                    linewidth: 2
+                    linewidth: 1
                 });
                 
                 // Create mesh
@@ -902,9 +878,8 @@ async def read_root():
                     id: generateId()
                 };
                 
-                // Position with slight offset to avoid overlap
-                const offset = sceneObjects.length * 2;
-                wireframe.position.set(offset, 0, 0);
+                // Position at origin (0, 0, 0)
+                wireframe.position.set(0, 0, 0);
                 
                 scene.add(wireframe);
                 sceneObjects.push(wireframe);
@@ -982,6 +957,123 @@ async def read_root():
                 updateStatusBar();
             }
             
+            function toggleObjectVisibility(objectId, event) {
+                event.stopPropagation(); // Prevent selection when clicking eye icon
+                const targetObject = sceneObjects.find(obj => 
+                    obj.userData && obj.userData.id === objectId
+                );
+                
+                if (targetObject) {
+                    // Toggle visibility
+                    targetObject.visible = !targetObject.visible;
+                    // Also hide/show children (ArUco markers, etc.)
+                    targetObject.traverse((child) => {
+                        child.visible = targetObject.visible;
+                    });
+                    
+                    // Update lists
+                    updateSceneObjectsList();
+                    updateSelectedObjectInfo();
+                }
+            }
+            window.toggleObjectVisibility = toggleObjectVisibility;
+            
+            function getSceneObjectsListHTML() {
+                // Filter to only show component objects (not markers or grasp points)
+                const componentObjects = sceneObjects.filter(obj => 
+                    obj.userData && obj.userData.type === 'component'
+                );
+                
+                if (componentObjects.length === 0) {
+                    return '<div class="loading" style="padding: 10px; font-size: 12px; color: #666;">No objects in scene</div>';
+                }
+                
+                let html = '<div class="scene-objects" style="max-height: 200px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; background: white;">';
+                
+                componentObjects.forEach(obj => {
+                    const isSelected = obj === selectedObject;
+                    const isVisible = obj.visible !== false; // Default to visible
+                    const eyeIcon = isVisible ? '👁️' : '👁️‍🗨️';
+                    const eyeStyle = isVisible ? 'opacity: 1;' : 'opacity: 0.4;';
+                    html += `
+                        <div class="scene-object-item ${isSelected ? 'selected' : ''}" 
+                             onclick="selectObjectFromTransformPanel(this)" 
+                             data-object-id="${obj.userData.id}"
+                             style="cursor: pointer; padding: 8px 12px; border-bottom: 1px solid #eee; transition: all 0.2s; display: flex; align-items: center; justify-content: space-between; ${isSelected ? 'background: rgba(52, 152, 219, 0.1); border-left: 3px solid #3498db;' : ''}">
+                            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+                                <span class="object-name" style="font-weight: 500; color: #2c3e50;">${obj.userData.displayName || obj.userData.name}</span>
+                                <span class="object-type" style="font-size: 11px; padding: 2px 6px; border-radius: 8px; background: #ecf0f1; color: #7f8c8d;">${obj.userData.type}</span>
+                            </div>
+                            <button onclick="toggleObjectVisibility('${obj.userData.id}', event)" 
+                                    style="background: none; border: none; cursor: pointer; font-size: 16px; padding: 4px 8px; ${eyeStyle} transition: opacity 0.2s; z-index: 10;"
+                                    title="${isVisible ? 'Hide object' : 'Show object'}"
+                                    onmouseover="this.style.opacity='1'"
+                                    onmouseout="this.style.opacity='${isVisible ? '1' : '0.4'}'">
+                                ${eyeIcon}
+                            </button>
+                        </div>
+                    `;
+                });
+                
+                html += '</div>';
+                return html;
+            }
+            
+            function getArUcoMarkersListHTML() {
+                // Filter to only show ArUco markers whose parent component is visible
+                const markerObjects = sceneObjects.filter(obj => {
+                    if (!obj.userData || obj.userData.type !== 'marker') {
+                        return false;
+                    }
+                    // Check if parent component is visible
+                    const parentId = obj.userData.parentId;
+                    if (parentId) {
+                        const parentObject = sceneObjects.find(p => 
+                            p.userData && p.userData.id === parentId
+                        );
+                        // Only show marker if parent exists and is visible
+                        return parentObject && parentObject.visible !== false;
+                    }
+                    // If no parent, show it (shouldn't happen, but handle gracefully)
+                    return true;
+                });
+                
+                if (markerObjects.length === 0) {
+                    return '<div class="loading" style="padding: 10px; font-size: 12px; color: #666;">No ArUco markers for visible objects</div>';
+                }
+                
+                let html = '<div class="scene-objects" style="max-height: 200px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; background: white;">';
+                
+                markerObjects.forEach(obj => {
+                    const isSelected = obj === selectedObject;
+                    const markerName = obj.userData.displayName || `ArUco ${obj.userData.arucoId || 'Marker'}`;
+                    html += `
+                        <div class="scene-object-item ${isSelected ? 'selected' : ''}" 
+                             onclick="selectObjectFromTransformPanel(this)" 
+                             data-object-id="${obj.userData.id}"
+                             style="cursor: pointer; padding: 8px 12px; border-bottom: 1px solid #eee; transition: all 0.2s; ${isSelected ? 'background: rgba(52, 152, 219, 0.1); border-left: 3px solid #3498db;' : ''}">
+                            <span class="object-name" style="font-weight: 500; color: #2c3e50;">${markerName}</span>
+                            <span class="object-type" style="font-size: 11px; padding: 2px 6px; border-radius: 8px; background: #ecf0f1; color: #7f8c8d;">${obj.userData.type}</span>
+                        </div>
+                    `;
+                });
+                
+                html += '</div>';
+                return html;
+            }
+            
+            function selectObjectFromTransformPanel(element) {
+                const objectId = element.getAttribute('data-object-id');
+                const targetObject = sceneObjects.find(obj => 
+                    obj.userData && obj.userData.id === objectId
+                );
+                
+                if (targetObject) {
+                    selectObject(targetObject);
+                }
+            }
+            window.selectObjectFromTransformPanel = selectObjectFromTransformPanel;
+            
             function updateSelectedObjectInfo() {
                 const container = document.getElementById('selectedObjectInfo');
                 
@@ -991,6 +1083,14 @@ async def read_root():
                             <h3>🎛️ Object Transform</h3>
                             <div class="loading" style="padding: 20px; text-align: center; color: #666;">
                                 Select an object to view and edit its transform
+                            </div>
+                            <div class="control-group" style="margin-top: 20px; border-top: 1px solid #e0e0e0; padding-top: 15px;">
+                                <h4 style="font-size: 14px; margin-bottom: 10px; color: #555;">Scene Objects</h4>
+                                ${getSceneObjectsListHTML()}
+                            </div>
+                            <div class="control-group" style="margin-top: 20px; border-top: 1px solid #e0e0e0; padding-top: 15px;">
+                                <h4 style="font-size: 14px; margin-bottom: 10px; color: #555;">ArUco Markers</h4>
+                                ${getArUcoMarkersListHTML()}
                             </div>
                         </div>
                     `;
@@ -1027,7 +1127,7 @@ async def read_root():
                         <h4 style="margin-top: 15px; margin-bottom: 5px; font-size: 14px; color: #555;">Position (m)</h4>
                         <div class="input-group" style="margin-bottom: 8px;">
                             <label style="min-width: 30px;">X:</label>
-                            <input type="number" id="objPosX" class="control-input" step="0.001" value="${pos.x.toFixed(3)}" 
+                            <input type="number" id="objPosX" class="control-input" step="0.0001" value="${pos.x.toFixed(4)}" 
                                    onchange="setObjectPosition('x', parseFloat(this.value))">
                             <div class="control-buttons">
                                 <button class="btn btn-small axis-btn x" onclick="moveObject('x', -0.01)">-</button>
@@ -1036,7 +1136,7 @@ async def read_root():
                         </div>
                         <div class="input-group" style="margin-bottom: 8px;">
                             <label style="min-width: 30px;">Y:</label>
-                            <input type="number" id="objPosY" class="control-input" step="0.001" value="${pos.y.toFixed(3)}" 
+                            <input type="number" id="objPosY" class="control-input" step="0.0001" value="${pos.y.toFixed(4)}" 
                                    onchange="setObjectPosition('y', parseFloat(this.value))">
                             <div class="control-buttons">
                                 <button class="btn btn-small axis-btn y" onclick="moveObject('y', -0.01)">-</button>
@@ -1045,7 +1145,7 @@ async def read_root():
                         </div>
                         <div class="input-group" style="margin-bottom: 15px;">
                             <label style="min-width: 30px;">Z:</label>
-                            <input type="number" id="objPosZ" class="control-input" step="0.001" value="${pos.z.toFixed(3)}" 
+                            <input type="number" id="objPosZ" class="control-input" step="0.0001" value="${pos.z.toFixed(4)}" 
                                    onchange="setObjectPosition('z', parseFloat(this.value))">
                             <div class="control-buttons">
                                 <button class="btn btn-small axis-btn z" onclick="moveObject('z', -0.01)">-</button>
@@ -1086,7 +1186,7 @@ async def read_root():
                         
                         <h4 style="margin-top: 15px; margin-bottom: 5px; font-size: 14px; color: #555;">Current Pose</h4>
                         <div style="background: #f5f5f5; padding: 10px; border-radius: 4px; font-size: 12px; font-family: monospace; margin-bottom: 10px;">
-                            <div><strong>Position:</strong> <span id="objCurrentPos">(${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)})</span></div>
+                            <div><strong>Position:</strong> <span id="objCurrentPos">(${pos.x.toFixed(4)}, ${pos.y.toFixed(4)}, ${pos.z.toFixed(4)})</span></div>
                             <div style="margin-top: 5px;"><strong>RPY:</strong> <span id="objCurrentRPY">(${(rot.x * 180 / Math.PI).toFixed(1)}°, ${(rot.y * 180 / Math.PI).toFixed(1)}°, ${(rot.z * 180 / Math.PI).toFixed(1)}°)</span></div>
                             <div style="margin-top: 5px;"><strong>Quaternion:</strong> <span id="objCurrentQuat">(${quat.x.toFixed(4)}, ${quat.y.toFixed(4)}, ${quat.z.toFixed(4)}, ${quat.w.toFixed(4)})</span></div>
                         </div>
@@ -1099,36 +1199,22 @@ async def read_root():
                                 <button class="btn btn-small btn-secondary" onclick="deleteSelectedObject()" style="flex: 1;">Delete</button>
                             </div>
                         </div>
+                        
+                        <div class="control-group" style="margin-top: 20px; border-top: 1px solid #e0e0e0; padding-top: 15px;">
+                            <h4 style="font-size: 14px; margin-bottom: 10px; color: #555;">Scene Objects</h4>
+                            ${getSceneObjectsListHTML()}
+                        </div>
+                        <div class="control-group" style="margin-top: 20px; border-top: 1px solid #e0e0e0; padding-top: 15px;">
+                            <h4 style="font-size: 14px; margin-bottom: 10px; color: #555;">ArUco Markers</h4>
+                            ${getArUcoMarkersListHTML()}
+                        </div>
                     </div>
                 `;
             }
             
             function updateSceneObjectsList() {
-                const container = document.getElementById('sceneObjects');
-                
-                if (sceneObjects.length === 0) {
-                    container.innerHTML = '<div class="loading" style="padding: 15px; font-size: 12px;">No objects in scene</div>';
-                    return;
-                }
-                
-                container.innerHTML = '';
-                
-                sceneObjects.forEach(obj => {
-                    const item = document.createElement('div');
-                    item.className = 'scene-object-item';
-                    if (obj === selectedObject) {
-                        item.classList.add('selected');
-                    }
-                    
-                    item.onclick = () => selectObject(obj);
-                    
-                    item.innerHTML = `
-                        <span class="object-name">${obj.userData.displayName || obj.userData.name}</span>
-                        <span class="object-type">${obj.userData.type}</span>
-                    `;
-                    
-                    container.appendChild(item);
-                });
+                // Update the right sidebar lists (scene objects and ArUco markers)
+                updateSelectedObjectInfo();
             }
             
             function updateStatusBar() {
@@ -1159,7 +1245,7 @@ async def read_root():
                 selectedObject.position[axis] += delta;
                 updateSelectedObjectInfo();
                 updateCurrentPoseDisplay();
-                updateStatus(`Moved ${selectedObject.userData.displayName} ${axis.toUpperCase()}: ${selectedObject.position[axis].toFixed(3)}`);
+                updateStatus(`Moved ${selectedObject.userData.displayName} ${axis.toUpperCase()}: ${selectedObject.position[axis].toFixed(4)}`);
             }
             window.moveObject = moveObject;
             
@@ -1197,7 +1283,7 @@ async def read_root():
                 const rpyEl = document.getElementById('objCurrentRPY');
                 const quatEl = document.getElementById('objCurrentQuat');
                 
-                if (posEl) posEl.textContent = `(${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)})`;
+                if (posEl) posEl.textContent = `(${pos.x.toFixed(4)}, ${pos.y.toFixed(4)}, ${pos.z.toFixed(4)})`;
                 if (rpyEl) rpyEl.textContent = `(${(rot.x * 180 / Math.PI).toFixed(1)}°, ${(rot.y * 180 / Math.PI).toFixed(1)}°, ${(rot.z * 180 / Math.PI).toFixed(1)}°)`;
                 if (quatEl) quatEl.textContent = `(${quat.x.toFixed(4)}, ${quat.y.toFixed(4)}, ${quat.z.toFixed(4)}, ${quat.w.toFixed(4)})`;
             }
@@ -1284,7 +1370,7 @@ async def read_root():
             window.toggleGrid = toggleGrid;
             
             function resetCamera() {
-                camera.position.set(0.5, -0.5, 0.5);  // Updated position
+                camera.position.set(0.3, -0.3, 0.3);  // Closer to scene
                 camera.up.set(0, 0, 1);  // Ensure Z is still up
                 camera.lookAt(0, 0, 0);
                 controls.reset();
@@ -1436,7 +1522,7 @@ async def read_root():
                 // Create material
                 const material = new THREE.LineBasicMaterial({ 
                     color: getComponentColor(componentName),
-                    linewidth: 2
+                    linewidth: 1
                 });
                 
                 // Create mesh
@@ -1663,7 +1749,7 @@ async def read_root():
                 
                 const material = new THREE.LineBasicMaterial({ 
                     color: 0x4a90e2,
-                    linewidth: 2
+                    linewidth: 1
                 });
                 
                 const wireframe = new THREE.LineSegments(geometry, material);
@@ -1959,10 +2045,24 @@ async def get_assemblies():
     """Get all saved assemblies."""
     return assembly_state["assemblies"]
 
+def find_available_port(start_port=8001, max_attempts=100):
+    """Find an available port starting from start_port."""
+    for port in range(start_port, start_port + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('', port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"Could not find an available port starting from {start_port}")
+
 def main():
     """Main entry point for the enhanced assembly application."""
+    # Find an available port starting from 8001
+    port = find_available_port(8001)
+    
     print("🚀 Starting Enhanced 3D Assembly App v2.0...")
-    print("📱 Open your browser to: http://localhost:8001")
+    print(f"📱 Open your browser to: http://localhost:{port}")
     print("🎯 Features:")
     print("   • Load and display wireframe components")
     print("   • Precision position and rotation controls")
@@ -1975,7 +2075,7 @@ def main():
     print("   • Arrow keys for position, Q/E for rotation")
     print("   • Mouse: wheel=zoom, right-drag=orbit")
     
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
     main()

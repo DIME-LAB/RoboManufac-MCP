@@ -1,0 +1,11 @@
+{
+    "version": "1.0",
+    "file_records": [
+        {
+            "source_url": "omniverse://localhost/NVIDIA/Materials/Base/Plastics/Plastic.mdl",
+            "source_hash": "9f75542dd687600392231be42e8b403599dff851",
+            "target_url": "./NVIDIA/Materials/Base/Plastics/Plastic.mdl",
+            "target_hash": "sha-256-flat;1048576;42c1468c5dab6548311e4fdb1071bb2c28c2bf0259a5e44e3445787d2cb150c0"
+        }
+    ]
+}

@@ -129,22 +129,30 @@ class CADLoader:
         }
         
     def _detect_units(self, mesh: o3d.geometry.TriangleMesh) -> float:
-        """Detect the most likely input units based on mesh dimensions."""
+        """Detect the most likely input units based on mesh dimensions.
+        
+        TODO: Fix scaling behavior - current heuristics are imperfect and may incorrectly
+        scale models. The unit detection should be more robust, possibly by:
+        - Checking file metadata if available
+        - Using user-provided unit information
+        - Better heuristics based on typical CAD model sizes
+        
+        Note: Models exported from Fusion 360 typically work correctly with current detection.
+        """
         bbox = mesh.get_axis_aligned_bounding_box()
         extent = bbox.get_extent()
         max_dim = np.max(extent)
         
-        # Heuristics for unit detection: (need to fix in future)
-        # - If max dimension > 10, likely in mm (convert to m: /1000)
-        # - If max dimension between 0.1 and 10, likely in cm (convert to m: /100)  
-        # - If max dimension < 0.1, likely already in m (no conversion)
+        # Heuristics for unit detection:
+        # - If max dimension > 0.1, likely in cm (convert to m: /100 = 0.01)
+        # - If max dimension < 0.1, likely already in m (no conversion = 1.0)
+        # Note: All models appear to be in cm, so we use 0.01 for anything > 0.1
+        # Note: If exported from Fusion 360, this detection typically works correctly
         
-        if max_dim > 10:
-            return 0.01  
-        elif max_dim > 0.1:
-            return 0.1   
+        if max_dim > 0.1:
+            return 0.01   # cm to meters (fixed: was 0.1 for 0.1-10 range, should be 0.01)
         else:
-            return 1.0   
+            return 1.0    # already in meters   
     
     def _get_conversion_factor(self, input_units: str) -> float:
         """Get conversion factor from input units to meters."""
@@ -159,11 +167,11 @@ class CADLoader:
     
     def get_input_units(self) -> str:
         """Get the detected input units."""
-        if self.unit_conversion == 0.001:
+        if abs(self.unit_conversion - 0.001) < 1e-6:
             return "mm"
-        elif self.unit_conversion == 0.01:
+        elif abs(self.unit_conversion - 0.01) < 1e-6:
             return "cm"
-        elif self.unit_conversion == 1.0:
+        elif abs(self.unit_conversion - 1.0) < 1e-6:
             return "m"
         else:
             return "unknown"

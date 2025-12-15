@@ -30,6 +30,7 @@ dependencies = [
     "reportlab>=4.0.0",
     "fastapi>=0.118.0",
     "uvicorn>=0.37.0",
+    "python-multipart>=0.0.6",
 ]
 
 [project.optional-dependencies]
@@ -43,7 +44,9 @@ dev = [
 
 [project.scripts]
 aruco-annotator = "aruco_annotator.main:main"
-cad-assembly = "assembly_app.main:main"
+assembly-app = "assembly_app.main:main"
+grasp-points-annotator = "grasp_points_annotator.main:main"
+symmetry-exporter = "symmetry_exporter.main:main"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

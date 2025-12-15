@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grasp Points Annotation App</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .app-container {
+            display: flex;
+            height: 100vh;
+        }
+        
+        .sidebar {
+            width: 400px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+        }
+        
+        .main-viewer {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #1a1a1a;
+        }
+        
+        .viewer-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        .controls-panel {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border: 1px solid #e0e0e0;
+        }
+        
+        .controls-panel h3 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+            font-size: 16px;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 5px;
+        }
+        
+        .btn {
+            background: linear-gradient(45deg, #3498db, #2980b9);
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+            margin: 3px;
+            width: 100%;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(52, 152, 219, 0.4);
+        }
+        
+        .btn:disabled {
+            background: #95a5a6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-success {
+            background: linear-gradient(45deg, #27ae60, #229954);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(45deg, #e74c3c, #c0392b);
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #2c3e50;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        
+        .form-group select,
+        .form-group input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #bdc3c7;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .form-group select:focus,
+        .form-group input:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+        
+        .status-message {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-size: 13px;
+        }
+        
+        .status-message.success {
+            background: #d4edda;
+            color: #155724;
+            border-left: 4px solid #28a745;
+        }
+        
+        .status-message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border-left: 4px solid #dc3545;
+        }
+        
+        .status-message.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border-left: 4px solid #17a2b8;
+        }
+        
+        .status-message.warning {
+            background: #fff3cd;
+            color: #856404;
+            border-left: 4px solid #ffc107;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #ecf0f1;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3498db, #2980b9);
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .image-viewer {
+            max-width: 100%;
+            max-height: 70vh;
+            border: 2px solid #3498db;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            margin: 10px;
+        }
+        
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            font-size: 13px;
+        }
+        
+        .results-table th,
+        .results-table td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .results-table th {
+            background: #3498db;
+            color: white;
+            font-weight: 500;
+        }
+        
+        .results-table tr:hover {
+            background: #f5f5f5;
+        }
+        
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <div class="sidebar">
+            <h2 style="color: #2c3e50; margin-bottom: 20px;">Grasp Points Pipeline</h2>
+            
+            <div class="controls-panel">
+                <h3>Configuration</h3>
+                <div class="form-group">
+                    <label for="objectSelect">Object:</label>
+                    <select id="objectSelect">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="markerSelect">Marker ID:</label>
+                    <select id="markerSelect" disabled>
+                        <option value="">Select object first</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="cameraDistance">Camera Distance:</label>
+                    <input type="number" id="cameraDistance" value="0.5" step="0.1" min="0.1" max="2.0">
+                </div>
+                <div class="form-group">
+                    <label for="minAreaThreshold">Min Area Threshold:</label>
+                    <input type="number" id="minAreaThreshold" value="1000" step="100" min="100">
+                </div>
+            </div>
+            
+            <div class="controls-panel">
+                <h3>Generate Grasp Points</h3>
+                <button class="btn" id="runStep1" onclick="runStep1()">Run Step 1</button>
+                <div id="step1-status"></div>
+            </div>
+            
+            <div class="controls-panel">
+                <h3>Transform to All Markers</h3>
+                <div class="form-group">
+                    <label for="objectThickness">Object Thickness (m):</label>
+                    <input type="number" id="objectThickness" value="" step="0.001" min="0" placeholder="Auto-detect">
+                </div>
+                <button class="btn btn-success" id="runStep2" onclick="runStep2()" disabled>Run Step 2</button>
+                <div id="step2-status"></div>
+            </div>
+            
+            <div class="controls-panel">
+                <h3>Export Results</h3>
+                <button class="btn btn-success" id="downloadBtn" onclick="downloadResults()" disabled>Download Results</button>
+            </div>
+            
+            <div id="statusMessages"></div>
+        </div>
+        
+        <div class="main-viewer">
+            <div class="viewer-container" id="viewer">
+                <div style="color: white; text-align: center;">
+                    <h3>Visualization Area</h3>
+                    <p style="margin-top: 20px; color: #95a5a6;">Run Step 1 to see rendered images and grasp points</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentObject = null;
+        let currentMarker = null;
+        let step1Result = null;
+        let step2Result = null;
+        
+        // Load objects on page load
+        window.addEventListener('load', async () => {
+            await loadObjects();
+        });
+        
+        async function loadObjects() {
+            try {
+                const select = document.getElementById('objectSelect');
+                select.innerHTML = '<option value="">Loading objects...</option>';
+                
+                const response = await fetch('/api/objects');
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (!data.objects || data.objects.length === 0) {
+                    select.innerHTML = '<option value="">No objects found</option>';
+                    showMessage('No objects found. Make sure data/models/ and data/aruco/ directories contain matching files.', 'warning');
+                    return;
+                }
+                
+                select.innerHTML = '<option value="">Select an object...</option>';
+                
+                data.objects.forEach(obj => {
+                    const option = document.createElement('option');
+                    option.value = obj;
+                    option.textContent = obj;
+                    select.appendChild(option);
+                });
+                
+                // Remove old event listener and add new one
+                const newSelect = select.cloneNode(true);
+                select.parentNode.replaceChild(newSelect, select);
+                document.getElementById('objectSelect').addEventListener('change', async (e) => {
+                    currentObject = e.target.value;
+                    if (currentObject) {
+                        await loadMarkers(currentObject);
+                    } else {
+                        document.getElementById('markerSelect').innerHTML = '<option value="">Select object first</option>';
+                        document.getElementById('markerSelect').disabled = true;
+                    }
+                });
+                
+                showMessage(`Loaded ${data.objects.length} object(s)`, 'success');
+            } catch (error) {
+                const select = document.getElementById('objectSelect');
+                select.innerHTML = '<option value="">Error loading objects</option>';
+                showMessage('Error loading objects: ' + error.message, 'error');
+                console.error('Error loading objects:', error);
+            }
+        }
+        
+        async function loadMarkers(objectName) {
+            try {
+                const select = document.getElementById('markerSelect');
+                select.innerHTML = '<option value="">Loading markers...</option>';
+                select.disabled = true;
+                
+                const response = await fetch(`/api/markers/${encodeURIComponent(objectName)}`);
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (!data.markers || data.markers.length === 0) {
+                    select.innerHTML = '<option value="">No markers found</option>';
+                    select.disabled = true;
+                    showMessage(`No markers found for ${objectName}`, 'warning');
+                    return;
+                }
+                
+                select.innerHTML = '<option value="">Select a marker...</option>';
+                select.disabled = false;
+                
+                data.markers.forEach(markerId => {
+                    const option = document.createElement('option');
+                    option.value = markerId;
+                    option.textContent = `Marker ${markerId}`;
+                    select.appendChild(option);
+                });
+                
+                // Remove old event listener and add new one
+                const newSelect = select.cloneNode(true);
+                select.parentNode.replaceChild(newSelect, select);
+                document.getElementById('markerSelect').addEventListener('change', (e) => {
+                    currentMarker = e.target.value ? parseInt(e.target.value) : null;
+                });
+            } catch (error) {
+                const select = document.getElementById('markerSelect');
+                select.innerHTML = '<option value="">Error loading markers</option>';
+                select.disabled = true;
+                showMessage('Error loading markers: ' + error.message, 'error');
+                console.error('Error loading markers:', error);
+            }
+        }
+        
+        async function runStep1() {
+            if (!currentObject || !currentMarker) {
+                showMessage('Please select an object and marker first', 'warning');
+                return;
+            }
+            
+            const btn = document.getElementById('runStep1');
+            btn.disabled = true;
+            btn.textContent = 'Running...';
+            
+            const statusDiv = document.getElementById('step1-status');
+            statusDiv.innerHTML = '<div class="status-message info">Running Step 1: Rendering and detecting grasp points...</div>';
+            
+            try {
+                const cameraDistance = parseFloat(document.getElementById('cameraDistance').value);
+                const minAreaThreshold = parseInt(document.getElementById('minAreaThreshold').value);
+                
+                const response = await fetch('/api/pipeline/step1', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        object_name: currentObject,
+                        marker_id: currentMarker,
+                        camera_distance: cameraDistance,
+                        min_area_threshold: minAreaThreshold
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Step 1 failed');
+                }
+                
+                step1Result = await response.json();
+                
+                // Update UI
+                statusDiv.innerHTML = `
+                    <div class="status-message success">
+                        Step 1 completed!<br>
+                        Detected ${step1Result.points_2d_count} 2D regions<br>
+                        Mapped ${step1Result.points_3d_count} 3D grasp points
+                    </div>
+                `;
+                
+                // Show visualization
+                displayStep1Results(step1Result);
+                
+                // Enable Step 2
+                document.getElementById('runStep2').disabled = false;
+                
+                showMessage('Step 1 completed successfully!', 'success');
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status-message error">Error: ${error.message}</div>`;
+                showMessage('Step 1 failed: ' + error.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Run Step 1';
+            }
+        }
+        
+        async function runStep2() {
+            if (!step1Result) {
+                showMessage('Please run Step 1 first', 'warning');
+                return;
+            }
+            
+            const btn = document.getElementById('runStep2');
+            btn.disabled = true;
+            btn.textContent = 'Running...';
+            
+            const statusDiv = document.getElementById('step2-status');
+            statusDiv.innerHTML = '<div class="status-message info">Running Step 2: Transforming to all markers...</div>';
+            
+            try {
+                const objectThickness = document.getElementById('objectThickness').value;
+                const payload = {
+                    object_name: currentObject,
+                    source_marker_id: currentMarker
+                };
+                if (objectThickness) {
+                    payload.object_thickness = parseFloat(objectThickness);
+                }
+                
+                const response = await fetch('/api/pipeline/step2', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Step 2 failed');
+                }
+                
+                step2Result = await response.json();
+                
+                // Update UI
+                statusDiv.innerHTML = `
+                    <div class="status-message success">
+                        Step 2 completed!<br>
+                        Total grasp points: ${step2Result.total_grasp_points}<br>
+                        Total markers: ${step2Result.total_markers}
+                    </div>
+                `;
+                
+                // Display results
+                displayStep2Results(step2Result);
+                
+                // Enable download
+                document.getElementById('downloadBtn').disabled = false;
+                
+                showMessage('Step 2 completed successfully!', 'success');
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status-message error">Error: ${error.message}</div>`;
+                showMessage('Step 2 failed: ' + error.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Run Step 2';
+            }
+        }
+        
+        function displayStep1Results(result) {
+            const viewer = document.getElementById('viewer');
+            viewer.innerHTML = `
+                <h3 style="color: white; margin-bottom: 20px;">Step 1 Results</h3>
+                <div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;">
+                    <div>
+                        <h4 style="color: white; margin-bottom: 10px;">Rendered Top-Down View</h4>
+                        <img src="${result.rendered_image}" class="image-viewer" alt="Rendered image">
+                    </div>
+                    ${result.visualization_image ? `
+                    <div>
+                        <h4 style="color: white; margin-bottom: 10px;">Grasp Points Visualization</h4>
+                        <img src="${result.visualization_image}" class="image-viewer" alt="Grasp points">
+                    </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+        
+        function displayStep2Results(result) {
+            const viewer = document.getElementById('viewer');
+            viewer.innerHTML = `
+                <h3 style="color: white; margin-bottom: 20px;">Step 2 Results</h3>
+                <div style="color: white; margin-bottom: 20px;">
+                    <p><strong>Object:</strong> ${result.object_name}</p>
+                    <p><strong>Source Marker:</strong> ${result.source_marker_id}</p>
+                    <p><strong>Total Grasp Points:</strong> ${result.total_grasp_points}</p>
+                    <p><strong>Total Markers:</strong> ${result.total_markers}</p>
+                    <p><strong>Output File:</strong> ${result.output_file}</p>
+                </div>
+                <div style="color: white;">
+                    <h4>Grasp Points (relative to CAD center):</h4>
+                    <table class="results-table" style="background: white; margin-top: 10px;">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>X (m)</th>
+                                <th>Y (m)</th>
+                                <th>Z (m)</th>
+                            </tr>
+                        </thead>
+                        <tbody style="color: #2c3e50;">
+                            ${result.grasp_points.map(gp => `
+                                <tr>
+                                    <td>${gp.id}</td>
+                                    <td>${gp.position.x.toFixed(4)}</td>
+                                    <td>${gp.position.y.toFixed(4)}</td>
+                                    <td>${gp.position.z.toFixed(4)}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+        
+        function downloadResults() {
+            if (!currentObject) {
+                showMessage('No results to download', 'warning');
+                return;
+            }
+            
+            window.location.href = `/api/download/${currentObject}`;
+        }
+        
+        function showMessage(message, type) {
+            const container = document.getElementById('statusMessages');
+            const div = document.createElement('div');
+            div.className = `status-message ${type}`;
+            div.textContent = message;
+            container.appendChild(div);
+            
+            setTimeout(() => {
+                if (div.parentNode) {
+                    div.parentNode.removeChild(div);
+                }
+            }, 5000);
+        }
+    </script>
+</body>
+</html>
+

@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import os
+import socket
 import tempfile
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -45,6 +46,11 @@ app.add_middleware(
 cad_loader = CADLoader()
 annotation_manager = AnnotationManager()
 aruco_generator = ArUcoGenerator()
+
+# Data directory path - automatically resolve relative to project root
+_app_dir = Path(__file__).parent
+_project_root = _app_dir.parent.parent
+DATA_DIR = _project_root / "data"
 
 # Global session state (in production, use database)
 session_state = {
@@ -470,6 +476,10 @@ def _marker_to_json(internal_id, marker: MarkerData):
     """Convert MarkerData to JSON format for frontend"""
     cad_info = session_state["cad_object_info"]
     
+    # Check if CAD model is loaded
+    if cad_info is None:
+        raise ValueError("No CAD model loaded. Please load a CAD model first.")
+    
     # Get CAD object pose to transform marker to world space for display
     cad_position = np.array(cad_info.get("position", [0.0, 0.0, 0.0]))
     cad_rotation = cad_info.get("rotation", {
@@ -759,11 +769,11 @@ def get_html_interface():
                 </div>
                 <div class="input-group">
                     <label>Size (m):</label>
-                    <input type="number" id="markerSize" value="0.05" step="0.001" min="0.001" max="1.0">
+                    <input type="number" id="markerSize" value="0.021" step="0.001" min="0.001" max="1.0">
                 </div>
                 <div class="input-group">
                     <label>Border Width (%):</label>
-                    <input type="number" id="borderWidth" value="0.2" step="0.01" min="0" max="0.5">
+                    <input type="number" id="borderWidth" value="0.05" step="0.01" min="0" max="0.5">
                 </div>
             </div>
             
@@ -869,15 +879,36 @@ def get_html_interface():
             <div class="controls-panel" id="translationControls" style="display: none;">
                 <h3>📍 Translate Selected Marker (In-Plane)</h3>
                 <p style="font-size: 12px; color: #666; margin-bottom: 10px;">Move marker along X and Y axes in marker's local plane (in meters)</p>
+                
+                <!-- Step size control -->
+                <div class="input-group">
+                    <label>Step Size (m):</label>
+                    <input type="number" id="inplaneStepSize" value="0.0005" step="0.0001" min="0.0001" max="0.1">
+                </div>
+                
+                <!-- Arrow buttons for in-plane movement -->
+                <div style="margin: 15px 0;">
+                    <div style="text-align: center; margin-bottom: 10px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: bold;">Axis 1:</label>
+                        <button class="btn" onclick="moveInPlane('axis1_neg')" style="margin: 0 5px;">←</button>
+                        <button class="btn" onclick="moveInPlane('axis1_pos')" style="margin: 0 5px;">→</button>
+                    </div>
+                    <div style="text-align: center;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: bold;">Axis 2:</label>
+                        <button class="btn" onclick="moveInPlane('axis2_neg')" style="margin: 0 5px;">↓</button>
+                        <button class="btn" onclick="moveInPlane('axis2_pos')" style="margin: 0 5px;">↑</button>
+                    </div>
+                </div>
+                
                 <div class="input-group">
                     <label>X (in-plane, m):</label>
-                    <input type="number" id="translateX" value="0" step="0.001" min="-0.1" max="0.1"
+                    <input type="number" id="translateX" value="0" step="0.0001" min="-0.1" max="0.1"
                            onchange="updateTranslationDisplay('x', this.value)"
                            title="Move marker along X-axis in marker's local plane">
                 </div>
                 <div class="input-group">
                     <label>Y (in-plane, m):</label>
-                    <input type="number" id="translateY" value="0" step="0.001" min="-0.1" max="0.1"
+                    <input type="number" id="translateY" value="0" step="0.0001" min="-0.1" max="0.1"
                            onchange="updateTranslationDisplay('y', this.value)"
                            title="Move marker along Y-axis in marker's local plane">
                 </div>
@@ -1415,7 +1446,7 @@ def get_html_interface():
         
         async function addMarkerToScene(markerData) {
             const pos = markerData.pose_absolute.position;
-            const size = markerData.size || 0.05;
+            const size = markerData.size || 0.021;
             const dictionary = markerData.dictionary || 'DICT_4X4_50';
             const arucoId = markerData.aruco_id;
             
@@ -1577,7 +1608,7 @@ def get_html_interface():
             }
         }
         
-        async function refreshMarkers(skipRotationControlsUpdate = false) {
+        async function refreshMarkers(skipRotationControlsUpdate = false, skipTranslationUpdate = false) {
             try {
                 // Store current selection before refresh
                 const previousSelectedId = selectedMarkerId;
@@ -1655,7 +1686,7 @@ def get_html_interface():
                         
                         // Only reload rotation controls if not skipping (e.g., after rotation update)
                         if (!skipRotationControlsUpdate) {
-                            showRotationControls(previousSelectedId);
+                            showRotationControls(previousSelectedId, skipTranslationUpdate);
                         }
                     } else {
                         selectedMarkerId = null;
@@ -1746,7 +1777,7 @@ def get_html_interface():
             }
         }
         
-        async function showRotationControls(internalId) {
+        async function showRotationControls(internalId, skipTranslationUpdate = false) {
             // Show rotation and translation controls and load current values
             const rotationPanel = document.getElementById('rotationControls');
             const translationPanel = document.getElementById('translationControls');
@@ -1781,15 +1812,17 @@ def get_html_interface():
                     updateRotationDisplay('pitch', pitchDeg);
                     updateRotationDisplay('yaw', yawDeg);
                     
-                    // Load current translation offset
-                    let transX = 0, transY = 0;
-                    if (marker.translation_offset !== undefined) {
-                        transX = marker.translation_offset.x || 0;
-                        transY = marker.translation_offset.y || 0;
+                    // Load current translation offset (only if not skipping)
+                    if (!skipTranslationUpdate) {
+                        let transX = 0, transY = 0;
+                        if (marker.translation_offset !== undefined) {
+                            transX = marker.translation_offset.x || 0;
+                            transY = marker.translation_offset.y || 0;
+                        }
+                        // Set input fields to current translation offset
+                        document.getElementById('translateX').value = transX.toFixed(4);
+                        document.getElementById('translateY').value = transY.toFixed(4);
                     }
-                    // Set input fields to current translation offset
-                    document.getElementById('translateX').value = transX.toFixed(3);
-                    document.getElementById('translateY').value = transY.toFixed(3);
                 }
             } catch (error) {
                 console.error('Error loading marker rotation:', error);
@@ -1959,10 +1992,11 @@ def get_html_interface():
                 if (response.ok) {
                     const data = await response.json();
                     // Update input fields with the actual translation offset that was set
-                    document.getElementById('translateX').value = data.translation_offset.x.toFixed(3);
-                    document.getElementById('translateY').value = data.translation_offset.y.toFixed(3);
+                    document.getElementById('translateX').value = data.translation_offset.x.toFixed(4);
+                    document.getElementById('translateY').value = data.translation_offset.y.toFixed(4);
                     // Refresh markers to show updated position (only the selected marker should move)
-                    await refreshMarkers();
+                    // Skip translation update to prevent overwriting the values we just set
+                    await refreshMarkers(false, true);
                 } else {
                     const errorData = await response.json();
                     alert('Error applying translation: ' + errorData.detail);
@@ -2031,6 +2065,79 @@ def get_html_interface():
                 }
             } catch (error) {
                 alert('Error resetting translation: ' + error.message);
+            }
+        }
+        
+        async function moveInPlane(direction) {
+            if (selectedMarkerId === null) {
+                alert('Please select a marker first');
+                return;
+            }
+            
+            try {
+                // Get step size
+                const stepSize = parseFloat(document.getElementById('inplaneStepSize').value) || 0.0005;
+                
+                // Get marker to find internal_id
+                const markersResponse = await fetch('/api/markers');
+                const markersData = await markersResponse.json();
+                
+                const selectedIdNum = typeof selectedMarkerId === 'number' ? selectedMarkerId : parseInt(selectedMarkerId);
+                const marker = markersData.markers.find(m => {
+                    const markerId = typeof m.internal_id === 'number' ? m.internal_id : parseInt(m.internal_id);
+                    return markerId === selectedIdNum;
+                });
+                
+                if (!marker) {
+                    alert('Marker not found');
+                    return;
+                }
+                
+                const markerInternalId = typeof marker.internal_id === 'number' 
+                    ? marker.internal_id 
+                    : parseInt(marker.internal_id);
+                
+                // Determine movement direction
+                let xDelta = 0;
+                let yDelta = 0;
+                
+                if (direction === 'axis1_neg') {
+                    xDelta = -stepSize;
+                } else if (direction === 'axis1_pos') {
+                    xDelta = stepSize;
+                } else if (direction === 'axis2_neg') {
+                    yDelta = -stepSize;
+                } else if (direction === 'axis2_pos') {
+                    yDelta = stepSize;
+                }
+                
+                // Apply relative translation
+                const response = await fetch(`/api/markers/${markerInternalId}/translation`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: 'relative',
+                        x: xDelta,
+                        y: yDelta
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // Update input fields
+                    document.getElementById('translateX').value = data.translation_offset.x.toFixed(4);
+                    document.getElementById('translateY').value = data.translation_offset.y.toFixed(4);
+                    
+                    // Refresh markers to show updated position
+                    // Skip translation update to prevent overwriting the values we just set
+                    await refreshMarkers(false, true);
+                } else {
+                    const errorData = await response.json();
+                    alert('Error moving marker: ' + errorData.detail);
+                }
+            } catch (error) {
+                alert('Error moving marker: ' + error.message);
             }
         }
         
@@ -2546,25 +2653,34 @@ def get_html_interface():
         async function importAnnotations() {
             const fileInput = document.getElementById('importFile');
             const file = fileInput.files[0];
-            if (!file) {
-                alert('Please select a file');
-                return;
-            }
             
+            try {
+                let response;
+                let source = '';
+                
+                // If user uploaded a file, use it
+                if (file) {
             const formData = new FormData();
             formData.append('file', file);
             
-            try {
-                const response = await fetch('/api/import', {
+                    response = await fetch('/api/import', {
                     method: 'POST',
                     body: formData
                 });
+                    source = 'uploaded file';
+                } else {
+                    // No file uploaded, try to auto-load from data folder
+                    response = await fetch('/api/import-auto', {
+                        method: 'POST'
+                    });
+                    source = 'data folder';
+                }
                 
                 if (response.ok) {
                     await refreshMarkers();
                     // Load CAD pose after import
                     await loadCADPose();
-                    alert('Annotations imported successfully');
+                    alert(`Annotations imported successfully from ${source}`);
                 } else {
                     const data = await response.json();
                     alert('Error: ' + data.detail);
@@ -2877,8 +2993,8 @@ async def get_config():
     return JSONResponse({
         "dictionaries": ArUcoGenerator.get_available_dictionaries(),
         "default_dictionary": "DICT_4X4_50",
-        "default_size": 0.05,
-        "default_border_width": 0.2
+        "default_size": 0.021,
+        "default_border_width": 0.05
     })
 
 @app.get("/api/cad-pose")
@@ -2964,8 +3080,8 @@ async def add_marker(config: Dict[str, Any]):
     try:
         dictionary = config.get("dictionary", "DICT_4X4_50")
         aruco_marker_id = config.get("aruco_id", session_state["next_marker_id"])
-        size = config.get("size", 0.05)
-        border_width = config.get("border_width", 0.2)
+        size = config.get("size", 0.021)
+        border_width = config.get("border_width", 0.05)
         
         pos_data = config.get("position", {})
         normal_data = config.get("normal", {"x": 0, "y": 0, "z": 1})
@@ -3035,6 +3151,10 @@ async def add_marker(config: Dict[str, Any]):
 @app.get("/api/markers")
 async def get_markers():
     """Get all markers."""
+    # Check if CAD model is loaded
+    if session_state.get("cad_object_info") is None:
+        raise HTTPException(status_code=400, detail="No CAD model loaded. Please load a CAD model first.")
+    
     markers_list = []
     for internal_id, marker in session_state["markers"].items():
         markers_list.append(_marker_to_json(internal_id, marker))
@@ -3629,7 +3749,7 @@ async def place_corner_markers(config: Dict[str, Any] = None):
     selected_face = face_definitions[face_index]
     
     # Get marker size from UI config
-    marker_size = config.get("size", 0.05)  # Total marker size (including border)
+    marker_size = config.get("size", 0.021)  # Total marker size (including border)
     
     # marker_size is the total size including border
     # To ensure the entire marker (including border) stays within the bounding box,
@@ -3732,6 +3852,11 @@ async def export_annotations():
     if len(session_state["markers"]) == 0:
         raise HTTPException(status_code=400, detail="No markers to export")
     
+    # Check if CAD model is loaded to get object name
+    current_file = session_state.get("current_file")
+    if not current_file:
+        raise HTTPException(status_code=400, detail="No CAD file name available. Please load a CAD model first.")
+    
     first_marker = list(session_state["markers"].values())[0]
     cad_info = session_state["cad_object_info"]
     
@@ -3773,15 +3898,22 @@ async def export_annotations():
     
     json_str = json.dumps(export_data, indent=2)
     
-    # Generate filename with _aruco suffix
-    filename = session_state.get("current_file")
-    if filename:
-        # Remove extension and add _aruco.json
-        base_name = Path(filename).stem
-        aruco_filename = f"{base_name}_aruco.json"
-    else:
-        aruco_filename = "aruco.json"
+    # Extract object name from filename (remove extension)
+    object_name = Path(current_file).stem
     
+    # Save to data/aruco directory (same location as import-auto looks for)
+    aruco_dir = DATA_DIR / "aruco"
+    aruco_dir.mkdir(parents=True, exist_ok=True)
+    aruco_file = aruco_dir / f"{object_name}_aruco.json"
+    
+    try:
+        with open(aruco_file, 'w') as f:
+            f.write(json_str)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving annotations to {aruco_file}: {str(e)}")
+    
+    # Also return as downloadable file
+    aruco_filename = f"{object_name}_aruco.json"
     return Response(
         content=json_str,
         media_type="application/json",
@@ -3793,6 +3925,11 @@ async def export_wireframe():
     """Export wireframe data from the loaded mesh to JSON file."""
     if session_state["mesh"] is None:
         raise HTTPException(status_code=400, detail="No mesh loaded. Please load a CAD model first.")
+    
+    # Check if CAD model is loaded to get object name
+    current_file = session_state.get("current_file")
+    if not current_file:
+        raise HTTPException(status_code=400, detail="No CAD file name available. Please load a CAD model first.")
     
     try:
         # Extract wireframe data from the loaded mesh
@@ -3846,21 +3983,31 @@ async def export_wireframe():
             'description': 'Wireframe data with vertices and edge connections'
         }
         
-        # Return as downloadable JSON file
         json_str = json.dumps(wireframe_data, indent=2)
-        filename = session_state["current_file"]
-        if filename:
-            # Remove extension and add _wireframe.json
-            base_name = Path(filename).stem
-            wireframe_filename = f"{base_name}_wireframe.json"
-        else:
-            wireframe_filename = "wireframe.json"
         
+        # Extract object name from filename (remove extension)
+        object_name = Path(current_file).stem
+        
+        # Save to data/wireframe directory
+        wireframe_dir = DATA_DIR / "wireframe"
+        wireframe_dir.mkdir(parents=True, exist_ok=True)
+        wireframe_file = wireframe_dir / f"{object_name}_wireframe.json"
+        
+        try:
+            with open(wireframe_file, 'w') as f:
+                f.write(json_str)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error saving wireframe to {wireframe_file}: {str(e)}")
+        
+        # Also return as downloadable file
+        wireframe_filename = f"{object_name}_wireframe.json"
         return Response(
             content=json_str,
             media_type="application/json",
             headers={"Content-Disposition": f"attachment; filename={wireframe_filename}"}
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to export wireframe: {str(e)}")
 
@@ -3890,38 +4037,80 @@ async def get_marker_image(
 
 @app.post("/api/import")
 async def import_annotations(file: UploadFile = File(...)):
-    """Import annotations from JSON file."""
+    """Import annotations from uploaded JSON file."""
+    # Check if CAD model is loaded first
+    if session_state.get("cad_object_info") is None:
+        raise HTTPException(status_code=400, detail="No CAD model loaded. Please load a CAD model first.")
+    
     try:
         content = await file.read()
         data = json.loads(content)
+        return await _process_imported_annotations(data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error importing annotations: {str(e)}")
+
+
+@app.post("/api/import-auto")
+async def import_annotations_auto():
+    """Automatically import annotations from data folder based on current CAD file."""
+    # Check if CAD model is loaded first
+    if session_state.get("cad_object_info") is None:
+        raise HTTPException(status_code=400, detail="No CAD model loaded. Please load a CAD model first.")
+    
+    current_file = session_state.get("current_file")
+    if not current_file:
+        raise HTTPException(status_code=400, detail="No CAD file name available. Please load a CAD model first.")
+    
+    # Extract object name from filename (remove extension)
+    object_name = Path(current_file).stem
+    
+    # Try to find annotation file in data/aruco directory
+    aruco_file = DATA_DIR / "aruco" / f"{object_name}_aruco.json"
+    
+    if not aruco_file.exists():
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Annotation file not found in data folder: {aruco_file}. Please upload a file or create annotations."
+        )
+    
+    try:
+        with open(aruco_file, 'r') as f:
+            data = json.load(f)
+        return await _process_imported_annotations(data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading annotations from {aruco_file}: {str(e)}")
+
+
+async def _process_imported_annotations(data: dict):
+    """Process imported annotation data and update session state."""
+    # Clear existing markers
+    session_state["markers"] = {}
+    session_state["next_marker_id"] = 0
+    
+    # Load markers
+    cad_info = data.get("cad_object_info", {})
+    cad_center = np.array(cad_info.get("center", [0, 0, 0]))
+    
+    # Load CAD pose from imported file if available, otherwise keep defaults
+    if session_state.get("cad_object_info") is not None:
+        imported_cad_info = data.get("cad_object_info", {})
         
-        # Clear existing markers
-        session_state["markers"] = {}
-        session_state["next_marker_id"] = 0
+        # Update position if present in imported file
+        if "position" in imported_cad_info:
+            session_state["cad_object_info"]["position"] = imported_cad_info["position"]
         
-        # Load markers
-        cad_info = data.get("cad_object_info", {})
-        cad_center = np.array(cad_info.get("center", [0, 0, 0]))
-        
-        # Load CAD pose from imported file if available, otherwise keep defaults
-        if session_state.get("cad_object_info") is not None:
-            imported_cad_info = data.get("cad_object_info", {})
-            
-            # Update position if present in imported file
-            if "position" in imported_cad_info:
-                session_state["cad_object_info"]["position"] = imported_cad_info["position"]
-            
-            # Update rotation if present in imported file, otherwise keep zero
-            if "rotation" in imported_cad_info:
-                session_state["cad_object_info"]["rotation"] = imported_cad_info["rotation"]
-            else:
-                session_state["cad_object_info"]["rotation"] = {
-                    "roll": 0.0,
-                    "pitch": 0.0,
-                    "yaw": 0.0,
-                    "quaternion": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
-                }
-        
+        # Update rotation if present in imported file, otherwise keep zero
+        if "rotation" in imported_cad_info:
+            session_state["cad_object_info"]["rotation"] = imported_cad_info["rotation"]
+        else:
+            session_state["cad_object_info"]["rotation"] = {
+                "roll": 0.0,
+                "pitch": 0.0,
+                "yaw": 0.0,
+                "quaternion": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+            }
+    
+    try:
         for marker_data in data.get("markers", []):
             aruco_id = marker_data["aruco_id"]
             
@@ -3979,8 +4168,8 @@ async def import_annotations(file: UploadFile = File(...)):
             marker = MarkerData(
                 aruco_id=aruco_id,
                 dictionary=data.get("aruco_dictionary", "DICT_4X4_50"),
-                size=data.get("size", 0.05),
-                border_width=data.get("border_width", 0.2),
+                size=data.get("size", 0.021),
+                border_width=data.get("border_width", 0.05),
                 position=position_local,
                 face_normal=surface_normal,
                 face_type=face_type
@@ -4040,10 +4229,24 @@ async def import_annotations(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def find_available_port(start_port=8000, max_attempts=100):
+    """Find an available port starting from start_port."""
+    for port in range(start_port, start_port + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('', port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"Could not find an available port starting from {start_port}")
+
 def main():
     """Main entry point for the ArUco Grasp Annotator application."""
+    # Find an available port starting from 8000
+    port = find_available_port(8000)
+    
     print("🚀 Starting ArUco Grasp Annotator Web App...")
-    print("📱 Open your browser to: http://localhost:8000")
+    print(f"📱 Open your browser to: http://localhost:{port}")
     print("🎯 Features:")
     print("   • Load and display CAD models (STL, OBJ, PLY)")
     print("   • Place ArUco markers with multiple placement modes")
@@ -4053,7 +4256,7 @@ def main():
     print("   • Mouse: Left drag to rotate, Right drag to pan, Wheel to zoom")
     print("   • Click placement mode: Click on model surface to place marker")
     
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
     main()

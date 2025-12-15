@@ -43,24 +43,15 @@ CAMERA_HEIGHT = 720
 CAMERA_HFOV = 82.4  # degrees
 CAMERA_VFOV = 52.4  # degrees
 
+# Camera orientation (world ← camera). This assumes the camera is facing the marker
+# from above (top-down) so we can lift the camera-frame pose into a nominal world frame.
+CAMERA_QUAT_WORLD = np.array([0.0, 1.0, 0.0, 0.0])  # [x, y, z, w]
+
 # ArUco marker parameters
 MARKER_SIZE = 0.021  # meters - physical size of your ArUco markers
 ARUCO_DICTIONARY = aruco.DICT_4X4_50
 
 # No scaling factor needed - wireframe should match actual object size
-
-# Kalman filter parameters
-MAX_MOVEMENT_THRESHOLD = 0.05  # meters - maximum allowed movement between frames
-HOLD_REQUIRED_FRAMES = 2       # frames - required stable detections before confirmation
-GHOST_TRACKING_FRAMES = 15     # frames - continue tracking when marker lost
-BLEND_FACTOR = 0.99            # 0.0-1.0 - trust in measurements vs predictions
-
-# Process noise parameters
-PROCESS_NOISE_POSITION = 1e-4   # Process noise for position (x,y,z)
-PROCESS_NOISE_QUATERNION = 1e-3 # Process noise for quaternion (qx,qy,qz,qw)
-PROCESS_NOISE_VELOCITY = 1e-4   # Process noise for velocity (vx,vy,vz)
-MEASUREMENT_NOISE_POSITION = 1e-4 # Measurement noise for position
-MEASUREMENT_NOISE_QUATERNION = 1e-4 # Measurement noise for quaternion
 
 # ROS2 topic names
 CAMERA_IMAGE_TOPIC = "/camera/image_raw"  # Change this to your camera topic
@@ -69,25 +60,38 @@ MARKER_POSE_TOPIC = "/marker_poses"       # Published marker poses topic
 STATUS_TOPIC = "/object_pose_status"      # Published status topic
 DEBUG_IMAGE_TOPIC = "/object_pose_debug"  # Published debug image topic (optional)
 
-# Data directory path
-DATA_DIRECTORY = "../../data"  # Path to your data directory with wireframe and aruco files
+# Data directory path (default: repo_root/data)
+DATA_DIRECTORY_DEFAULT = Path(__file__).resolve().parent.parent.parent / "data"
 
-# Import the Kalman filter and utility functions from the original script
-from object_pose_estimator_kalman import (
-    QuaternionKalman, rvec_to_quat, quat_to_rvec, slerp_quat,
-    load_wireframe_data, load_aruco_annotations, get_available_models,
-    estimate_object_pose_from_marker, project_vertices_to_image, draw_wireframe, 
-    estimate_pose_with_kalman, euler_to_rotation_matrix, rotation_matrix_to_euler
+from core.kalman_filter import (
+    QuaternionKalman,
+    MAX_MOVEMENT_THRESHOLD,
+    HOLD_REQUIRED_FRAMES,
+    GHOST_TRACKING_FRAMES,
+    BLEND_FACTOR,
 )
-
-# Import functions without scaling
-from object_pose_estimator_kalman import (
-    transform_mesh_to_camera_frame as original_transform_mesh_to_camera_frame
+from core.pose_math import (
+    rvec_to_quat,
+    quat_to_rvec,
+    slerp_quat,
+    euler_to_rotation_matrix,
+    rotation_matrix_to_euler,
+    estimate_object_pose_from_marker,
+    pose_to_world,
 )
+from core.model_io import load_wireframe_data, load_aruco_annotations, get_available_models
+from core.mesh_ops import (
+    transform_mesh_to_camera_frame,
+    project_vertices_to_image,
+    draw_wireframe,
+)
+from object_pose_estimator_camera import estimate_pose_with_kalman
 
 def estimate_object_pose_from_marker_no_scaling(marker_pose, aruco_annotation):
     """
-    Estimate the 6D pose of the object center from ArUco marker pose without scaling.
+    Estimate the 6D pose of the object center from ArUco marker pose.
+    Uses homogeneous transformation matrices to compute position and orientation together.
+    This function is an alias for the updated estimate_object_pose_from_marker function.
     
     Args:
         marker_pose: (tvec, rvec) - ArUco marker pose in camera frame
@@ -96,90 +100,25 @@ def estimate_object_pose_from_marker_no_scaling(marker_pose, aruco_annotation):
     Returns:
         object_pose: (object_tvec, object_rvec) - Object center pose in camera frame
     """
-    # Get marker position and rotation
-    marker_tvec, marker_rvec = marker_pose
-    
-    # Convert marker rotation vector to rotation matrix
-    marker_rotation_matrix, _ = cv2.Rodrigues(marker_rvec)
-    
-    # Get the marker's pose relative to CAD center from annotation
-    marker_relative_pose = aruco_annotation['pose_relative_to_cad_center']
-    
-    # Coordinate system transformation matrix
-    coord_transform = np.array([
-        [-1,  0,  0],  # X-axis: flip (3D graphics X-right → OpenCV X-left)
-        [0,   1,  0],  # Y-axis
-        [0,   0, -1]   # Z-axis: flip (3D graphics Z-forward → OpenCV Z-backward)
-    ])
-    
-    # Get marker position relative to object center (in object frame) - NO SCALING
-    marker_pos_in_object = np.array([
-        marker_relative_pose['position']['x'],
-        marker_relative_pose['position']['y'], 
-        marker_relative_pose['position']['z']
-    ])
-    
-    # Apply coordinate transformation only (no scaling)
-    marker_pos_in_object = coord_transform @ marker_pos_in_object
-    
-    # Get marker orientation relative to object center
-    marker_rot = marker_relative_pose['rotation']
-    marker_rotation_in_object = euler_to_rotation_matrix(
-        marker_rot['roll'], marker_rot['pitch'], marker_rot['yaw']
-    )
-    
-    # Apply coordinate system transformation to the rotation matrix
-    marker_rotation_in_object = coord_transform @ marker_rotation_in_object @ coord_transform.T
-    
-    # Calculate object center position in camera frame
-    # The object center is at the origin of the object frame
-    # We need to transform the origin (0,0,0) from object frame to camera frame
-    object_origin_in_marker_frame = marker_rotation_in_object.T @ (-marker_pos_in_object)
-    object_tvec = marker_tvec.flatten() + marker_rotation_matrix @ object_origin_in_marker_frame
-    
-    # Calculate object center orientation in camera frame
-    # The object orientation is the marker orientation composed with the marker-to-object rotation
-    object_rotation_matrix = marker_rotation_matrix @ marker_rotation_in_object.T
-    
-    # Convert back to rotation vector
-    object_rvec, _ = cv2.Rodrigues(object_rotation_matrix)
-    
-    return object_tvec, object_rvec
+    # Use the updated implementation from object_pose_estimator_kalman
+    return estimate_object_pose_from_marker(marker_pose, aruco_annotation)
 
 def transform_mesh_to_camera_frame_no_scaling(vertices, object_pose):
-    """Transform mesh vertices from object center frame to camera frame without scaling"""
-    object_tvec, object_rvec = object_pose
-    
-    # Convert rotation vector to rotation matrix
-    rotation_matrix, _ = cv2.Rodrigues(object_rvec)
-    
-    # Coordinate system transformation matrix
-    coord_transform = np.array([
-        [-1,  0,  0],  # X-axis: flip (3D graphics X-right → OpenCV X-left)
-        [0,   1,  0],  # Y-axis: unchanged (both systems use Y-up)
-        [0,   0, -1]   # Z-axis: flip (3D graphics Z-forward → OpenCV Z-backward)
-    ])
-    
-    # Transform vertices from object center frame to camera frame
-    transformed_vertices = []
-    for vertex in vertices:
-        # Apply coordinate system transformation only (no scaling)
-        vertex_transformed = coord_transform @ np.array(vertex)
-        
-        # Transform from object frame to camera frame
-        vertex_cam = rotation_matrix @ vertex_transformed + object_tvec
-        transformed_vertices.append(vertex_cam)
-    
-    return np.array(transformed_vertices)
+    """Transform mesh vertices from object center frame to camera frame.
+    This function is an alias for the updated transform_mesh_to_camera_frame function.
+    """
+    # Use the updated implementation from object_pose_estimator_kalman
+    from object_pose_estimator_kalman import transform_mesh_to_camera_frame
+    return transform_mesh_to_camera_frame(vertices, object_pose)
 
 class ObjectPoseEstimatorROS2(Node):
     """ROS2 Node for object pose estimation with Kalman filtering"""
     
-    def __init__(self, model_name, camera_topic):
+    def __init__(self, model_name, camera_topic, data_dir):
         super().__init__('object_pose_estimator_ros2')
         
         self.model_name = model_name
-        self.data_dir = Path(DATA_DIRECTORY)
+        self.data_dir = Path(data_dir)
         
         # Initialize CV bridge for ROS2 image conversion
         self.bridge = CvBridge()
@@ -205,6 +144,9 @@ class ObjectPoseEstimatorROS2(Node):
         # Initialize pose tracking
         self.last_object_pose = None
         self.pose_velocity = np.zeros(6)  # [vx, vy, vz, wx, wy, wz]
+
+        # Shutdown flag to allow graceful exit from main loop
+        self.should_shutdown = False
         
         self.get_logger().info(f"Object Pose Estimator ROS2 initialized for model: {model_name}")
         self.get_logger().info(f"Camera topic: {camera_topic}")
@@ -239,25 +181,44 @@ class ObjectPoseEstimatorROS2(Node):
         
         # Load ArUco annotations
         try:
-            aruco_annotations = load_aruco_annotations(aruco_annotations_file)
+            (
+                aruco_annotations,
+                base_marker_size,
+                border_width_percent,
+                aruco_dict_name,
+            ) = load_aruco_annotations(aruco_annotations_file)
             self.get_logger().info(f"Loaded {len(aruco_annotations)} ArUco annotations")
+            self.get_logger().info(f"Marker size: {base_marker_size}m, border width: {border_width_percent}")
+            self.get_logger().info(f"ArUco dictionary: {aruco_dict_name}")
         except Exception as e:
             self.get_logger().error(f"Error loading ArUco annotations: {e}")
             raise
+        
+        # Store marker size info for later use
+        self.base_marker_size = base_marker_size
+        self.border_width_percent = border_width_percent
+        self.aruco_dict_name = aruco_dict_name
         
         # Create marker annotations dictionary
         self.marker_annotations = {}
         for annotation in aruco_annotations:
             marker_id = annotation['aruco_id']
             self.marker_annotations[marker_id] = annotation
-            self.get_logger().info(f"Loaded annotation for marker ID {marker_id}: size={annotation['size']}m, border={annotation['border_width']}m, face={annotation['face_type']}")
+            self.get_logger().info(f"Loaded annotation for marker ID {marker_id}: face={annotation['face_type']}")
         
         self.target_ids = list(self.marker_annotations.keys())
         self.get_logger().info(f"Target marker IDs: {self.target_ids}")
     
     def setup_aruco_detector(self):
         """Setup ArUco marker detector"""
-        dictionary = aruco.getPredefinedDictionary(ARUCO_DICTIONARY)
+        try:
+            dictionary_id = getattr(aruco, getattr(self, "aruco_dict_name", "DICT_4X4_50"))
+        except AttributeError:
+            self.get_logger().warning(
+                f"Unknown dictionary '{getattr(self, 'aruco_dict_name', None)}', falling back to DICT_4X4_50"
+            )
+            dictionary_id = ARUCO_DICTIONARY
+        dictionary = aruco.getPredefinedDictionary(dictionary_id)
         parameters = aruco.DetectorParameters()
         self.detector = aruco.ArucoDetector(dictionary, parameters)
     
@@ -318,20 +279,15 @@ class ObjectPoseEstimatorROS2(Node):
                     target_corners = corners[target_idx]
                     marker_annotation = self.marker_annotations[marker_id]
                     
-                    # Calculate the inner pattern size for ArUco detection
-                    # The border is INSIDE the total size, so we need to subtract it
-                    total_marker_size = MARKER_SIZE
-                    border_percentage = marker_annotation['border_width']
-                    border_width = total_marker_size * border_percentage
-                    marker_size = total_marker_size - 2 * border_width  # Inner pattern area
-                    
-                    # TODO: Update this when border convention changes to outside approach
-                    # TODO: Use absolute border values in meters instead of percentages
+                    # Calculate actual ArUco pattern size (border is INSIDE the total marker size)
+                    # Match external aruco_camera_localizer: TOTAL_MARKER_SIZE = MARKER_SIZE - 2 * BORDER_WIDTH
+                    border_width = self.base_marker_size * self.border_width_percent
+                    marker_size_with_border = self.base_marker_size - 2 * border_width  # Actual ArUco pattern size
                     
                     # Estimate pose with Kalman filtering
                     tvec, rvec, filtered_marker_id, is_confirmed = estimate_pose_with_kalman(
                         frame, [target_corners], [marker_id], self.camera_matrix, self.dist_coeffs,
-                        marker_size, self.kalman_filters, self.marker_stabilities, 
+                        marker_size_with_border, self.kalman_filters, self.marker_stabilities, 
                         self.last_seen_frames, self.current_frame
                     )
                     
@@ -346,7 +302,7 @@ class ObjectPoseEstimatorROS2(Node):
                             'position': position,
                             'distance': distance,
                             'is_confirmed': is_confirmed,
-                            'marker_size': marker_size
+                            'marker_size': marker_size_with_border
                         })
                 
                 # Find the best marker (closest confirmed detection)
@@ -358,9 +314,6 @@ class ObjectPoseEstimatorROS2(Node):
                     best_marker_annotation = best_detection['marker_annotation']
                     object_pose_detected = True
                 
-                # Draw debug information
-                self.draw_debug_info(display_frame, successful_detections, confirmed_detections)
-        
         # Estimate and draw object pose if detected
         if object_pose_detected and best_marker_pose is not None:
             self.estimate_and_draw_object_pose(
@@ -382,7 +335,7 @@ class ObjectPoseEstimatorROS2(Node):
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             self.get_logger().info("Quit requested by user")
-            rclpy.shutdown()
+            self.should_shutdown = True
     
     def estimate_and_draw_object_pose(self, marker_pose, marker_annotation, display_frame):
         """Estimate object pose from marker pose and draw on display frame"""
@@ -390,8 +343,8 @@ class ObjectPoseEstimatorROS2(Node):
             # Estimate object pose from marker pose (no scaling)
             object_tvec, object_rvec = estimate_object_pose_from_marker_no_scaling(marker_pose, marker_annotation)
             
-            # Draw mesh overlay
-            self.draw_mesh_overlay(display_frame, object_tvec, object_rvec)
+            # Draw mesh overlay using the same transform as aruco_mesh_overlay
+            self.draw_mesh_overlay(display_frame, marker_pose, marker_annotation)
             
             # Draw object center coordinate axes
             cv2.drawFrameAxes(display_frame, self.camera_matrix, self.dist_coeffs, 
@@ -400,10 +353,47 @@ class ObjectPoseEstimatorROS2(Node):
             # Print pose info to console
             rotation_matrix, _ = cv2.Rodrigues(object_rvec)
             rpy = rotation_matrix_to_euler(rotation_matrix)
+            quat_cam = R.from_matrix(rotation_matrix).as_quat()  # [x, y, z, w] in camera frame
+
+            # Compute world-frame pose using shared helper.
+            object_tvec_world, world_rvec, quat_world, world_rpy = pose_to_world(
+                object_tvec, object_rvec, CAMERA_QUAT_WORLD
+            )
             
-            print(f"\rObject Pose: Pos=({object_tvec[0]:.3f}, {object_tvec[1]:.3f}, {object_tvec[2]:.3f}) | "
-                  f"RPY=({np.degrees(rpy[0]):.1f}°, {np.degrees(rpy[1]):.1f}°, {np.degrees(rpy[2]):.1f}°)", 
-                  end="", flush=True)
+            # Console output: world-frame only. Camera-frame lines retained below as comments.
+            # print(
+            #     f"\rObject Pose (cam): Pos=({object_tvec[0]:.3f}, {object_tvec[1]:.3f}, {object_tvec[2]:.3f}) | "
+            #     f"RPY_cam=({np.degrees(rpy[0]):.1f}°, {np.degrees(rpy[1]):.1f}°, {np.degrees(rpy[2]):.1f}°) | "
+            #     f"Quat_cam=({quat_cam[0]:.3f}, {quat_cam[1]:.3f}, {quat_cam[2]:.3f}, {quat_cam[3]:.3f})",
+            #     end="", flush=True
+            # )
+            print(
+                f"\rObject Pose (world): Pos=({object_tvec_world[0]:.3f}, {object_tvec_world[1]:.3f}, {object_tvec_world[2]:.3f}) | "
+                f"RPY_world=({np.degrees(world_rpy[0]):.1f}°, {np.degrees(world_rpy[1]):.1f}°, {np.degrees(world_rpy[2]):.1f}°) | "
+                f"Quat_world=({quat_world[0]:.3f}, {quat_world[1]:.3f}, {quat_world[2]:.3f}, {quat_world[3]:.3f})",
+                end="", flush=True
+            )
+
+            # Overlay object pose text on the image
+            y0 = 40
+            face = cv2.FONT_HERSHEY_SIMPLEX
+            color = (0, 255, 255)
+            marker_id = marker_annotation.get('aruco_id', 'N/A')
+            face_type = marker_annotation.get('face_type', 'N/A')
+            cv2.putText(display_frame, f"Marker {marker_id} ({face_type}) | Dict: {self.aruco_dict_name}", (10, y0), face, 0.7, (0, 255, 0), 2)
+            # Overlay: world-frame only. Camera-frame overlay kept commented for reference.
+            # cv2.putText(display_frame, f"Pos_cam: ({object_tvec[0]:.3f}, {object_tvec[1]:.3f}, {object_tvec[2]:.3f})",
+            #             (10, y0 + 30), face, 0.6, color, 2)
+            # cv2.putText(display_frame, f"RPY_cam: ({np.degrees(rpy[0]):.1f}, {np.degrees(rpy[1]):.1f}, {np.degrees(rpy[2]):.1f}) deg",
+            #             (10, y0 + 60), face, 0.6, color, 2)
+            # cv2.putText(display_frame, f"Quat_cam: ({quat_cam[0]:.3f}, {quat_cam[1]:.3f}, {quat_cam[2]:.3f}, {quat_cam[3]:.3f})",
+            #             (10, y0 + 90), face, 0.6, color, 2)
+            cv2.putText(display_frame, f"Pos_world: ({object_tvec_world[0]:.3f}, {object_tvec_world[1]:.3f}, {object_tvec_world[2]:.3f})",
+                        (10, y0 + 30), face, 0.6, color, 2)
+            cv2.putText(display_frame, f"RPY_world: ({np.degrees(world_rpy[0]):.1f}, {np.degrees(world_rpy[1]):.1f}, {np.degrees(world_rpy[2]):.1f}) deg",
+                        (10, y0 + 60), face, 0.6, color, 2)
+            cv2.putText(display_frame, f"Quat_world: ({quat_world[0]:.3f}, {quat_world[1]:.3f}, {quat_world[2]:.3f}, {quat_world[3]:.3f})",
+                        (10, y0 + 90), face, 0.6, color, 2)
             
             return (object_tvec, object_rvec)
             
@@ -413,58 +403,21 @@ class ObjectPoseEstimatorROS2(Node):
     
     
     def draw_debug_info(self, frame, successful_detections, confirmed_detections):
-        """Draw debug information on the frame"""
-        for i, detection in enumerate(successful_detections):
-            marker_id = detection['marker_id']
-            position = detection['position']
-            distance = detection['distance']
-            is_confirmed = detection['is_confirmed']
-            marker_annotation = detection['marker_annotation']
-            face_type = marker_annotation['face_type']
-            
-            # Position text based on marker index
-            y_offset = 30 + i * 120
-            
-            # Color coding
-            if is_confirmed:
-                text_color = (0, 255, 0)  # Green for confirmed
-                marker_status = " (CONFIRMED)"
-            else:
-                text_color = (255, 255, 0)  # Yellow for holding
-                marker_status = " (HOLDING)"
-            
-            # Draw marker information
-            cv2.putText(frame, f"Marker ID: {marker_id} ({face_type}){marker_status}", 
-                       (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.8, text_color, 2)
-            cv2.putText(frame, f"Pos: ({position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f})", 
-                       (10, y_offset + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
-            cv2.putText(frame, f"Distance: {distance:.3f}m", 
-                       (10, y_offset + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
-            
-            # Draw coordinate axes
-            cv2.drawFrameAxes(frame, self.camera_matrix, self.dist_coeffs, 
-                            detection['rvec'], detection['tvec'], detection['marker_size'])
+        """(Debug overlay removed)"""
+        return
     
-    def draw_mesh_overlay(self, frame, object_tvec, object_rvec):
-        """Draw mesh wireframe overlay on the frame"""
+    def draw_mesh_overlay(self, frame, marker_pose, marker_annotation):
+        """Draw mesh wireframe overlay on the frame using shared mesh ops."""
         try:
-            # Transform mesh vertices to camera frame (no scaling)
-            transformed_vertices = transform_mesh_to_camera_frame_no_scaling(
-                self.vertices, (object_tvec, object_rvec)
-            )
-            
-            # Project vertices to image coordinates
+            object_pose = estimate_object_pose_from_marker(marker_pose, marker_annotation)
+            transformed_vertices = transform_mesh_to_camera_frame(self.vertices, object_pose)
             projected_vertices = project_vertices_to_image(
                 transformed_vertices, self.camera_matrix, self.dist_coeffs
             )
-            
-            # Draw wireframe
             if len(projected_vertices) > 0:
-                draw_wireframe(frame, projected_vertices, self.edges, 
-                             color=(0, 255, 0), thickness=2)
-            
+                draw_wireframe(frame, projected_vertices, self.edges, color=(0, 255, 0), thickness=2)
         except Exception as e:
-            self.get_logger().warn(f"Error drawing mesh overlay: {e}")
+            self.get_logger().warning(f"Error drawing mesh overlay: {e}")
 
 
 def main():
@@ -478,11 +431,13 @@ def main():
                        help="ROS2 camera image topic")
     parser.add_argument("--list-models", "-l", action="store_true",
                        help="List available models and exit")
+    parser.add_argument("--data-dir", "-d", type=str, default=None,
+                       help="Path to data directory containing wireframe/aruco (default: repo_root/data)")
     
     args = parser.parse_args()
     
     # Get available models
-    data_dir = Path(DATA_DIRECTORY)
+    data_dir = Path(args.data_dir) if args.data_dir else DATA_DIRECTORY_DEFAULT
     available_models = get_available_models(data_dir)
     
     if args.list_models:
@@ -509,14 +464,17 @@ def main():
         # Create and run the node
         node = ObjectPoseEstimatorROS2(
             model_name=args.model,
-            camera_topic=args.camera_topic
+            camera_topic=args.camera_topic,
+            data_dir=data_dir
         )
         
         print(f"Starting ROS2 Object Pose Estimator for model: {args.model}")
         print(f"Camera topic: {args.camera_topic}")
         print("Press 'q' in the OpenCV window to quit")
         
-        rclpy.spin(node)
+        # Spin with periodic check for shutdown flag to handle 'q' key presses
+        while rclpy.ok() and not node.should_shutdown:
+            rclpy.spin_once(node, timeout_sec=0.05)
         
     except KeyboardInterrupt:
         print("\nShutting down...")
@@ -524,7 +482,11 @@ def main():
         print(f"Error: {e}")
     finally:
         cv2.destroyAllWindows()
-        rclpy.shutdown()
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass  # Ignore if context already shutdown
 
 
 if __name__ == "__main__":

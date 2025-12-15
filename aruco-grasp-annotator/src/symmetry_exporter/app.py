@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import json
 import os
+import socket
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import uvicorn
@@ -33,14 +34,18 @@ app.add_middleware(
 # Data directory path
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
-# Available components
-COMPONENTS = [
-    "base_scaled70",
-    "fork_orange_scaled70", 
-    "fork_yellow_scaled70",
-    "line_brown_scaled70",
-    "line_red_scaled70"
-]
+def get_available_components():
+    """Dynamically discover components from wireframe directory."""
+    wireframe_dir = DATA_DIR / "wireframe"
+    components = []
+    
+    if wireframe_dir.exists():
+        for wireframe_file in wireframe_dir.glob("*_wireframe.json"):
+            # Extract component name by removing _wireframe.json suffix
+            component_name = wireframe_file.stem.replace("_wireframe", "")
+            components.append(component_name)
+    
+    return sorted(components)
 
 # Global state
 app_state = {
@@ -2023,7 +2028,10 @@ async def get_components():
     """Get all available components with their wireframe and ArUco data."""
     components = {}
     
-    for component_name in COMPONENTS:
+    # Dynamically discover components from wireframe directory
+    available_components = get_available_components()
+    
+    for component_name in available_components:
         try:
             # Load wireframe data
             wireframe_path = DATA_DIR / "wireframe" / f"{component_name}_wireframe.json"
@@ -2063,7 +2071,9 @@ async def get_components():
 @app.get("/api/components/{component_name}")
 async def get_component(component_name: str):
     """Get a specific component's data."""
-    if component_name not in COMPONENTS:
+    # Check if component exists by verifying wireframe file exists
+    wireframe_path = DATA_DIR / "wireframe" / f"{component_name}_wireframe.json"
+    if not wireframe_path.exists():
         raise HTTPException(status_code=404, detail="Component not found")
     
     try:
@@ -2165,10 +2175,24 @@ async def export_symmetry(data: Dict[str, Any]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error exporting symmetry data: {str(e)}")
 
+def find_available_port(start_port=8002, max_attempts=100):
+    """Find an available port starting from start_port."""
+    for port in range(start_port, start_port + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('', port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"Could not find an available port starting from {start_port}")
+
 def main():
     """Main entry point for the symmetry exporter application."""
+    # Find an available port starting from 8002
+    port = find_available_port(8002)
+    
     print("🚀 Starting Symmetry Exporter...")
-    print("📱 Open your browser to: http://localhost:8002")
+    print(f"📱 Open your browser to: http://localhost:{port}")
     print("🎯 Features:")
     print("   • Load and display wireframe components")
     print("   • Visualize grasp points")
@@ -2180,7 +2204,7 @@ def main():
     print("   • Arrow keys for position, Q/E for rotation")
     print("   • Mouse: wheel=zoom, right-drag=orbit")
     
-    uvicorn.run(app, host="0.0.0.0", port=8002)
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
     main()
