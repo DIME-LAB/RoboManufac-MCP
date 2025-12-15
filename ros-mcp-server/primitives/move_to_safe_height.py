@@ -19,31 +19,8 @@ import numpy as np
 import re
 import json
 import yaml
-from pathlib import Path
-from box import Box
 
-
-# Configs containing paths of ROS and other related filepaths
-config_path = Path(__file__).parent.parent / "SERVER_PATHS_CFGS.yaml"
-with open(config_path, "r") as f:
-    yaml_cfg = Box(yaml.safe_load(f))
-
-# Try to import from utils first (new structure), fallback to direct import (old structure)
-try:
-    from primitives.utils.ik_solver import compute_ik, compute_ik_robust
-except ImportError:
-    # Fallback to direct import if utils structure doesn't exist
-    custom_lib_path = yaml_cfg.ros_paths.custom_lib_path
-    if custom_lib_path not in sys.path:
-        sys.path.append(custom_lib_path)
-    try:
-        from ik_solver import compute_ik, compute_ik_robust
-    except ImportError as e:
-    print(f"Failed to import IK solver: {e}")
-    sys.exit(1)
-=======
 from primitives.utils.ik_solver import compute_ik, compute_ik_robust
->>>>>>> 91df9f5 (refactor: major cleanup - remove YOLOE/visual servo, reorganize primitives):primitives/move_to_safe_height.py
 
 class MoveToSafeHeight(Node):
     def __init__(self):

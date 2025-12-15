@@ -17,24 +17,8 @@ from sensor_msgs.msg import JointState
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 import numpy as np
 import argparse
-import yaml
-from pathlib import Path
-from box import Box
 
-
-# Configs containing paths of ROS and other related filepaths
-config_path = Path(__file__).parent.parent / "SERVER_PATHS_CFGS.yaml"
-with open(config_path, "r") as f:
-    yaml_cfg = Box(yaml.safe_load(f))
-
-<<<<<<<< HEAD:ros-mcp-server/primitives/move_to_place_down.py
-# Add custom libraries to Python path
-custom_lib_path = yaml_cfg.ros_paths.custom_lib_path
-if custom_lib_path not in sys.path:
-    sys.path.append(custom_lib_path)
-========
 from primitives.utils.ik_solver import ik_objective_quaternion, forward_kinematics, dh_params
->>>>>>>> 91df9f5 (refactor: major cleanup - remove YOLOE/visual servo, reorganize primitives):ros-mcp-server/primitives/move_to_clear_area.py
 
 class MoveToClearArea(Node):
     def __init__(self, mode='move'):
