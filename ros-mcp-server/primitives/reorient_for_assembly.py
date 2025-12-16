@@ -845,15 +845,7 @@ class ReorientForAssembly(Node):
     
     def reorient_for_target(self, object_name, base_name, duration=5.0,
                             current_object_orientation=None, target_base_orientation=None):
-        """Reorient EE so OBJECT ends up at a valid assembly pose.
-        
-        Args:
-            object_name: Name of the object to reorient
-            base_name: Name of the base object (used for JSON lookup)
-            duration: Trajectory duration in seconds
-            current_object_orientation: Current object orientation quaternion [x,y,z,w] (optional)
-            target_base_orientation: Target base orientation quaternion [x,y,z,w] (optional)
-        """
+        """Reorient EE so OBJECT ends up at a valid assembly pose."""
         
         # Load assembly config based on base_name if not already loaded for this base
         if self.loaded_base_name != base_name:
@@ -880,7 +872,6 @@ class ReorientForAssembly(Node):
                 return False
             R_object_current = self.get_rotation_from_transform(self.current_poses[obj_key].transform)
         
-        # === Get target orientation ===
         # === Get base orientation ===
         if target_base_orientation is not None:
             R_base = self.get_rotation_from_quat(target_base_orientation)
@@ -899,6 +890,15 @@ class ReorientForAssembly(Node):
             self.get_logger().error(f"No target orientation for {object_name}")
             return False
         
+        # === Load fold symmetry ===
+        fold_data = FoldSymmetry.load_symmetry_data(object_name, self.symmetry_dir)
+        if fold_data is None:
+            fold_data = FoldSymmetry.load_symmetry_data(f"{object_name}_scaled70", self.symmetry_dir)
+        
+        # === Calculate grasp rotation ===
+        # R_grasp = R_EE^T × R_object (object orientation relative to EE frame)
+        R_grasp = R_EE_current.T @ R_object_current
+        
         # === Transform target to world frame ===
         # Use quaternion from JSON directly to avoid gimbal-lock-sensitive conversions.
         R_target_relative = R.from_quat(target_quat).as_matrix()
@@ -912,15 +912,6 @@ class ReorientForAssembly(Node):
         
         # Target in base-relative frame (same as R_target_relative)
         R_object_target_base_relative = R_target_relative
-        
-        # === Load fold symmetry ===
-        fold_data = FoldSymmetry.load_symmetry_data(object_name, self.symmetry_dir)
-        if fold_data is None:
-            fold_data = FoldSymmetry.load_symmetry_data(f"{object_name}_scaled70", self.symmetry_dir)
-        
-        # === Calculate grasp rotation ===
-        # R_grasp = R_EE^T × R_object (object orientation relative to EE frame)
-        R_grasp = R_EE_current.T @ R_object_current
         
         # Log initial object orientation
         initial_obj_rpy = R.from_matrix(R_object_current).as_euler('xyz', degrees=True)
@@ -1011,14 +1002,9 @@ class ReorientForAssembly(Node):
             R_object_from_cardinal = R_EE_cardinal @ R_grasp
             
             # Find the closest equivalent target to the object orientation from cardinal EE
-            # Use base-relative target for symmetry generation
-            target_for_symmetry = R_object_target_base_relative
             equivalent_targets = FoldSymmetry.generate_equivalent_target_orientations(
-                target_for_symmetry, fold_data, None
+                R_object_target_world, fold_data, None
             )
-            
-            # Transform equivalent targets to world frame
-            equivalent_targets = [R_base @ R_eq for R_eq in equivalent_targets]
             cardinal_object_error = float('inf')
             best_cardinal_target_R = None
             for R_target_equiv in equivalent_targets:
@@ -1091,13 +1077,9 @@ class ReorientForAssembly(Node):
             resulting_object_R = R_EE_redirected_matrix @ R_grasp
             
             # Find closest equivalent target to verify alignment is still good
-            # Use base-relative target for symmetry generation
-            target_for_symmetry_redirect = R_object_target_base_relative
             equivalent_targets = FoldSymmetry.generate_equivalent_target_orientations(
-                target_for_symmetry_redirect, fold_data, None
+                R_object_target_world, fold_data, None
             )
-            # Transform equivalent targets to world frame
-            equivalent_targets = [R_base @ R_eq for R_eq in equivalent_targets]
             object_error_redirected = float('inf')
             best_target_R_redirected = None
             for R_target_equiv in equivalent_targets:
@@ -1240,15 +1222,15 @@ def main(args=None):
                        help='Name of the object to reorient')
     parser.add_argument('--base-name', type=str, required=True,
                        help='Name of the base object')
-
+    
     # In real mode, orientations are required; in sim mode, they're optional (read from topic)
     parser.add_argument('--current-object-orientation', type=float, nargs=4, metavar=('X','Y','Z','W'),
                        help='Current object orientation quaternion [x, y, z, w] (required in real mode)')
     parser.add_argument('--target-base-orientation', type=float, nargs=4, metavar=('X','Y','Z','W'),
                        help='Target base orientation quaternion [x, y, z, w] (required in real mode)')
-
+    
     args = parser.parse_args()
-
+    
     # Validate arguments based on mode
     if args.mode == 'real':
         if args.current_object_orientation is None or args.target_base_orientation is None:
