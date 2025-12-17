@@ -1467,24 +1467,48 @@ export class MCPClient {
           // Add any remaining pending tool results before breaking
           if (pendingToolResults.length > 0) {
             if (isAnthropic) {
-              const toolResultsMessage: Message = {
-                role: 'user',
-                content: '',
-                tool_results: pendingToolResults.map(tr => ({
-                  type: 'tool_result',
-                  tool_use_id: tr.toolUseId!,
-                  content: tr.content,
-                })),
-              };
-              this.messages.push(toolResultsMessage);
+              // Verify that the last assistant message has tool_use blocks that match our tool results
+              // Find the last assistant message with content_blocks
+              let lastAssistantIndex = this.messages.length - 1;
+              while (lastAssistantIndex >= 0) {
+                const msg = this.messages[lastAssistantIndex];
+                if (msg.role === 'assistant' && msg.content_blocks) {
+                  const toolUseBlocks = msg.content_blocks.filter((block: any) => block.type === 'tool_use');
+                  if (toolUseBlocks.length > 0) {
+                    const toolUseIds = new Set(toolUseBlocks.map((block: any) => block.id));
+                    
+                    // Only add tool results that have matching tool_use blocks
+                    const validToolResults = pendingToolResults.filter(tr => 
+                      tr.toolUseId && toolUseIds.has(tr.toolUseId)
+                    );
+                    
+                    if (validToolResults.length > 0) {
+                      const toolResultsMessage: Message = {
+                        role: 'user',
+                        content: '',
+                        tool_results: validToolResults.map(tr => ({
+                          type: 'tool_result',
+                          tool_use_id: tr.toolUseId!,
+                          content: tr.content,
+                        })),
+                      };
+                      this.messages.push(toolResultsMessage);
+                    }
+                    break;
+                  }
+                }
+                lastAssistantIndex--;
+              }
             } else {
               for (const tr of pendingToolResults) {
-                const toolMessage: Message = {
-                  role: 'tool',
-                  tool_call_id: tr.toolCallId!,
-                  content: tr.content,
-                };
-                this.messages.push(toolMessage);
+                if (tr.toolCallId) {
+                  const toolMessage: Message = {
+                    role: 'tool',
+                    tool_call_id: tr.toolCallId,
+                    content: tr.content,
+                  };
+                  this.messages.push(toolMessage);
+                }
               }
             }
             pendingToolResults.length = 0;
@@ -1728,40 +1752,52 @@ export class MCPClient {
           if (pendingToolResults && pendingToolResults.length > 0) {
             const isAnthropic = this.modelProvider.getProviderName() === 'anthropic';
             if (isAnthropic) {
+              // Find the last assistant message with tool_use blocks
               let lastAssistantIndex = this.messages.length - 1;
-              while (lastAssistantIndex >= 0 && this.messages[lastAssistantIndex].role !== 'assistant') {
-                lastAssistantIndex--;
-              }
-              if (lastAssistantIndex >= 0) {
-                let toolResultsIndex = lastAssistantIndex + 1;
-                if (toolResultsIndex < this.messages.length && 
-                    this.messages[toolResultsIndex].role === 'user' && 
-                    this.messages[toolResultsIndex].tool_results) {
-                  for (const tr of pendingToolResults) {
-                    if (tr.toolUseId) {
-                      this.messages[toolResultsIndex].tool_results!.push({
-                        type: 'tool_result',
-                        tool_use_id: tr.toolUseId,
-                        content: tr.content,
-                      });
+              while (lastAssistantIndex >= 0) {
+                const msg = this.messages[lastAssistantIndex];
+                if (msg.role === 'assistant' && msg.content_blocks) {
+                  // Check if this assistant message has tool_use blocks
+                  const toolUseBlocks = msg.content_blocks.filter((block: any) => block.type === 'tool_use');
+                  if (toolUseBlocks.length > 0) {
+                    // Verify that all pending tool results have matching tool_use_ids
+                    const toolUseIds = new Set(toolUseBlocks.map((block: any) => block.id));
+                    const validToolResults = pendingToolResults.filter(tr => 
+                      tr.toolUseId && toolUseIds.has(tr.toolUseId)
+                    );
+                    
+                    if (validToolResults.length > 0) {
+                      // Check if we already have a tool_results message after this assistant
+                      let toolResultsIndex = lastAssistantIndex + 1;
+                      if (toolResultsIndex < this.messages.length && 
+                          this.messages[toolResultsIndex].role === 'user' && 
+                          this.messages[toolResultsIndex].tool_results) {
+                        // Add to existing tool_results message
+                        for (const tr of validToolResults) {
+                          this.messages[toolResultsIndex].tool_results!.push({
+                            type: 'tool_result',
+                            tool_use_id: tr.toolUseId!,
+                            content: tr.content,
+                          });
+                        }
+                      } else {
+                        // Create new tool_results message
+                        const toolResultsMessage: Message = {
+                          role: 'user',
+                          content: '',
+                          tool_results: validToolResults.map(tr => ({
+                            type: 'tool_result',
+                            tool_use_id: tr.toolUseId!,
+                            content: tr.content,
+                          })),
+                        };
+                        this.messages.splice(toolResultsIndex, 0, toolResultsMessage);
+                      }
                     }
-                  }
-                } else {
-                  const toolResultsMessage: Message = {
-                    role: 'user',
-                    content: '',
-                    tool_results: pendingToolResults
-                      .filter(tr => tr.toolUseId)
-                      .map(tr => ({
-                        type: 'tool_result',
-                        tool_use_id: tr.toolUseId!,
-                        content: tr.content,
-                      })),
-                  };
-                  if (toolResultsMessage.tool_results!.length > 0) {
-                    this.messages.splice(toolResultsIndex, 0, toolResultsMessage);
+                    break;
                   }
                 }
+                lastAssistantIndex--;
               }
             } else {
               for (const tr of pendingToolResults) {
