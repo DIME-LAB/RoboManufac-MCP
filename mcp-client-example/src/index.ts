@@ -26,7 +26,7 @@ import type {
   SummarizationConfig,
   MessageStreamEvent,
 } from './model-provider.js';
-import { ClaudeProvider, type ToolExecutor } from './providers/claude.js';
+import { AnthropicProvider, type ToolExecutor } from './providers/anthropic.js';
 
 type MCPClientOptions = StdioServerParameters & {
   loggerOptions?: LoggerOptions;
@@ -77,8 +77,8 @@ export class MCPClient {
       provider?: ModelProvider;
     },
   ) {
-    // Use provided provider or default to Claude
-    this.modelProvider = options?.provider || new ClaudeProvider();
+    // Use provided provider or default to Anthropic
+    this.modelProvider = options?.provider || new AnthropicProvider();
 
     // Support both single server (backward compatibility) and multiple servers
     const configs = Array.isArray(serverConfigs) ? serverConfigs : [serverConfigs];
@@ -89,8 +89,18 @@ export class MCPClient {
 
     this.logger = new Logger(options?.loggerOptions ?? { mode: 'verbose' });
     
-    // Initialize model (default to provider's default model)
-    this.model = options?.model || this.modelProvider.getDefaultModel();
+    // Initialize model - require explicit model specification
+    if (!options?.model) {
+      try {
+        this.model = this.modelProvider.getDefaultModel();
+      } catch (error) {
+        throw new Error(
+          'Model must be specified. Please provide a model using --model=<model-id> or --select-model.'
+        );
+      }
+    } else {
+      this.model = options.model;
+    }
     
     // Token counter will be initialized asynchronously in start() method
     // We can't initialize it here because createTokenCounter is now async
@@ -124,14 +134,24 @@ export class MCPClient {
     },
   ): MCPClient {
     const client = Object.create(MCPClient.prototype);
-    // Use provided provider or default to Claude
-    client.modelProvider = options?.provider || new ClaudeProvider();
+    // Use provided provider or default to Anthropic
+    client.modelProvider = options?.provider || new AnthropicProvider();
     client.messages = [];
     client.servers = new Map();
     client.tools = [];
     client.logger = new Logger(options?.loggerOptions ?? { mode: 'verbose' });
     client.serverConfigs = servers;
-    client.model = options?.model || client.modelProvider.getDefaultModel();
+    if (!options?.model) {
+      try {
+        client.model = client.modelProvider.getDefaultModel();
+      } catch (error) {
+        throw new Error(
+          'Model must be specified. Please provide a model using --model=<model-id> or --select-model.'
+        );
+      }
+    } else {
+      client.model = options.model;
+    }
     client.currentTokenCount = 0;
     // Token counter will be initialized asynchronously - set to null for now
     client.tokenCounter = null as any;
@@ -231,6 +251,11 @@ export class MCPClient {
     
     this.logger.log(
       `Chat session started: ${this.chatHistoryManager.getCurrentSessionId()}\n`,
+      { type: 'info' },
+    );
+    
+    this.logger.log(
+      `Using model: ${this.model}\n`,
       { type: 'info' },
     );
   }
@@ -414,7 +439,7 @@ export class MCPClient {
 
   /**
    * Execute a tool via MCP servers
-   * This is the callback that the provider calls when Claude wants to use a tool
+   * This is the callback that the provider calls when Anthropic wants to use a tool
    * 
    * Extracts server name, routes to correct MCP server, and returns result
    */
@@ -1053,7 +1078,7 @@ export class MCPClient {
         content: m.content,
       }));
 
-      // Call API to summarize (using ClaudeProvider's createMessage for non-streaming)
+      // Call API to summarize (using AnthropicProvider's createMessage for non-streaming)
       const summaryMessages: Message[] = [
         ...messagesToSummarize,
         {
@@ -1136,18 +1161,29 @@ export class MCPClient {
    * - Looping
    * 
    * We just need to display text and collect assistant messages
-   * Supports both Claude (complete response objects) and OpenAI (streaming events)
+   * Supports both Anthropic (complete response objects) and OpenAI (streaming events)
    */
   private async processToolUseStream(
     stream: AsyncIterable<any>,
-  ): Promise<void> {
+    cancellationCheck?: () => boolean,
+  ): Promise<Array<{ toolUseId?: string; toolCallId?: string; content: string }>> {
     this.logger.log(consoleStyles.assistant);
     
     let currentMessage = '';
     let messageStarted = false;
     let hasOutputContent = false; // Track if we've output any content after "Assistant:"
     
+    // Track tool results to add to messages
+    const pendingToolResults: Array<{
+      toolUseId?: string;
+      toolCallId?: string;
+      content: string;
+    }> = [];
+    const isAnthropic = this.modelProvider.getProviderName() === 'anthropic';
+    
     for await (const chunk of stream) {
+      // Don't break immediately - let current chunk finish processing
+      // Cancellation will be checked in provider loops to stop further iterations
       // Handle tool_use_complete events (from provider)
       if (chunk.type === 'tool_use_complete') {
         // Tool was executed - provider already handled it
@@ -1162,6 +1198,20 @@ export class MCPClient {
           { type: 'info' },
         );
         hasOutputContent = true;
+        
+        // Track tool result to add to messages
+        // Tool results will be added when we see the next assistant message or end_turn
+        if (isAnthropic && chunk.toolUseId) {
+          pendingToolResults.push({
+            toolUseId: chunk.toolUseId,
+            content: chunk.result || '',
+          });
+        } else if (!isAnthropic && chunk.toolCallId) {
+          pendingToolResults.push({
+            toolCallId: chunk.toolCallId,
+            content: chunk.result || '',
+          });
+        }
         // Pretty-print JSON if applicable
         if (chunk.result) {
           try {
@@ -1264,8 +1314,21 @@ export class MCPClient {
           };
           this.messages.push(assistantMessage);
           
+          // Add any pending tool results (for OpenAI, tools complete after message_stop)
+          if (pendingToolResults.length > 0 && !isAnthropic) {
+            for (const tr of pendingToolResults) {
+              const toolMessage: Message = {
+                role: 'tool',
+                tool_call_id: tr.toolCallId!,
+                content: tr.content,
+              };
+              this.messages.push(toolMessage);
+            }
+            pendingToolResults.length = 0;
+          }
+          
           // Use official token counting for accurate counts
-          if (this.modelProvider.getProviderName() === 'claude') {
+          if (this.modelProvider.getProviderName() === 'anthropic') {
             const provider = this.modelProvider as any;
             const exactCount = await provider.countTokensOfficial(
               this.messages,
@@ -1293,8 +1356,8 @@ export class MCPClient {
         continue;
       }
 
-      // Handle complete response objects from Claude API
-      // These come from Claude's createMessageStreamWithToolUse
+      // Handle complete response objects from Anthropic API
+      // These come from Anthropic's createMessageStreamWithToolUse
       if (chunk.content && Array.isArray(chunk.content)) {
         // Check if response has tool_use blocks (tools are about to be executed)
         const toolUseBlocks = chunk.content.filter((block: any) => block.type === 'tool_use');
@@ -1307,8 +1370,11 @@ export class MCPClient {
         
         // Extract and display text content
         const textBlocks = chunk.content.filter((block: any) => block.type === 'text');
-        if (textBlocks.length > 0) {
-          const textContent = textBlocks.map((block: any) => block.text).join('\n');
+        const textContent = textBlocks.length > 0 
+          ? textBlocks.map((block: any) => block.text).join('\n')
+          : '';
+        
+        if (textContent) {
           // Text will appear on the same line as "Assistant:" if it's the first content
           this.logger.log(textContent);
           hasOutputContent = true;
@@ -1318,43 +1384,125 @@ export class MCPClient {
           if (textContent && !textContent.endsWith('\n')) {
             this.logger.log('\n');
           }
-          
-          // Add assistant message to history (only if there's actual content)
-          if (textContent.trim()) {
-            const assistantMessage: Message = {
-              role: 'assistant',
-              content: textContent,
-            };
-            this.messages.push(assistantMessage);
+        }
+        
+        // Add assistant message to messages (with tool_use blocks if present)
+        // This ensures tool calls are preserved in conversation context
+        const assistantMessage: Message = {
+          role: 'assistant',
+          content: textContent,
+          content_blocks: chunk.content, // Preserve full content including tool_use blocks
+        };
+        this.messages.push(assistantMessage);
+        
+        // If we have pending tool results, add them now (after the assistant message with tool_use blocks)
+        if (pendingToolResults.length > 0) {
+          if (isAnthropic) {
+            // Verify that the assistant message has tool_use blocks that match our tool results
+            const toolUseBlocks = chunk.content.filter((block: any) => block.type === 'tool_use');
+            const toolUseIds = new Set(toolUseBlocks.map((block: any) => block.id));
             
-            // Use official token counting for accurate counts
-            if (this.modelProvider.getProviderName() === 'claude') {
-              const provider = this.modelProvider as any;
-              const exactCount = await provider.countTokensOfficial(
-                this.messages,
-                this.model,
-                this.tools,
-              );
-              this.currentTokenCount = exactCount;
+            // Only add tool results that have matching tool_use blocks
+            const validToolResults = pendingToolResults.filter(tr => 
+              tr.toolUseId && toolUseIds.has(tr.toolUseId)
+            );
+            
+            if (validToolResults.length > 0) {
+              // Anthropic: add user message with tool_results
+              const toolResultsMessage: Message = {
+                role: 'user',
+                content: '',
+                tool_results: validToolResults.map(tr => ({
+                  type: 'tool_result',
+                  tool_use_id: tr.toolUseId!,
+                  content: tr.content,
+                })),
+              };
+              this.messages.push(toolResultsMessage);
             }
-            // OpenAI: token counts come from token_usage events (already handled above)
+            
+            // Remove valid results from pending (keep invalid ones for potential later matching)
+            for (const tr of validToolResults) {
+              const index = pendingToolResults.findIndex(p => p.toolUseId === tr.toolUseId);
+              if (index >= 0) {
+                pendingToolResults.splice(index, 1);
+              }
+            }
+          } else {
+            // OpenAI: add tool role messages
+            for (const tr of pendingToolResults) {
+              if (tr.toolCallId) {
+                const toolMessage: Message = {
+                  role: 'tool',
+                  tool_call_id: tr.toolCallId,
+                  content: tr.content,
+                };
+                this.messages.push(toolMessage);
+              }
+            }
+            // Clear pending results after adding them
+            pendingToolResults.length = 0;
           }
         }
+        
+        // Use official token counting for accurate counts
+        if (this.modelProvider.getProviderName() === 'anthropic') {
+          const provider = this.modelProvider as any;
+          const exactCount = await provider.countTokensOfficial(
+            this.messages,
+            this.model,
+            this.tools,
+          );
+          this.currentTokenCount = exactCount;
+        }
+        // OpenAI: token counts come from token_usage events (already handled above)
 
         // Check if we need to summarize after this response
         if (this.shouldSummarize()) {
           await this.autoSummarize();
         }
 
-        // If stop_reason is 'end_turn', Claude is done
+        // If stop_reason is 'end_turn', Anthropic is done
         if (chunk.stop_reason === 'end_turn') {
+          // Add any remaining pending tool results before breaking
+          if (pendingToolResults.length > 0) {
+            if (isAnthropic) {
+              const toolResultsMessage: Message = {
+                role: 'user',
+                content: '',
+                tool_results: pendingToolResults.map(tr => ({
+                  type: 'tool_result',
+                  tool_use_id: tr.toolUseId!,
+                  content: tr.content,
+                })),
+              };
+              this.messages.push(toolResultsMessage);
+            } else {
+              for (const tr of pendingToolResults) {
+                const toolMessage: Message = {
+                  role: 'tool',
+                  tool_call_id: tr.toolCallId!,
+                  content: tr.content,
+                };
+                this.messages.push(toolMessage);
+              }
+            }
+            pendingToolResults.length = 0;
+          }
           break;
         }
       }
     }
+    
+    // Return any remaining pending tool results so they can be flushed by caller
+    return pendingToolResults;
   }
 
-  async processQuery(query: string, isSystemPrompt: boolean = false, attachments?: Array<{ path: string; fileName: string; ext: string; mediaType: string }>) {
+  async processQuery(query: string, isSystemPrompt: boolean = false, attachments?: Array<{ path: string; fileName: string; ext: string; mediaType: string }>, cancellationCheck?: () => boolean) {
+    // Track message count before adding new message (for cleanup on abort)
+    const messagesBeforeQuery = this.messages.length;
+    const tokenCountBeforeQuery = this.currentTokenCount;
+    
     try {
       // Check if we need to summarize before adding new message
       if (this.shouldSummarize()) {
@@ -1371,11 +1519,11 @@ export class MCPClient {
         // Create content blocks from attachments and query text
         const contentBlocks = this.attachmentManager.createContentBlocks(attachments, query);
         
-        // Create message with content_blocks for Claude API
+        // Create message with content_blocks for Anthropic API
         userMessage = {
           role: 'user',
           content: query, // Keep text content for compatibility
-          content_blocks: contentBlocks, // Add content blocks for Claude
+          content_blocks: contentBlocks, // Add content blocks for Anthropic
         };
       } else {
         // Standard text message
@@ -1384,7 +1532,7 @@ export class MCPClient {
       
       this.messages.push(userMessage);
       // Token counting for messages with attachments is approximate
-      // Claude API will provide accurate counts during streaming
+      // Anthropic API will provide accurate counts during streaming
       await this.ensureTokenCounter();
       this.currentTokenCount += this.tokenCounter!.countMessageTokens(userMessage);
 
@@ -1403,25 +1551,100 @@ export class MCPClient {
 
       // Use the provider's agentic loop instead of manual processing
       // This handles:
-      // - Sending messages to Claude
+      // - Sending messages to Anthropic
       // - Detecting tool use (stop_reason === 'tool_use')
       // - Executing tools via our callback
-      // - Sending results back to Claude
-      // - Repeating until Claude is done
+      // - Sending results back to Anthropic
+      // - Repeating until Anthropic is done
       const stream = (this.modelProvider as any).createMessageStreamWithToolUse(
         this.messages,
         this.model,
         this.tools,
         8192,
         toolExecutor,
+        undefined, // maxIterations (use default)
+        cancellationCheck, // Pass cancellation check to provider
       );
 
       // Process the stream and collect final assistant message
-      await this.processToolUseStream(stream);
+      // Don't break immediately on cancellation - let current chunk finish
+      const pendingToolResults = await this.processToolUseStream(stream, cancellationCheck);
+      
+      // Flush any remaining pending tool results (in case we aborted before they were added)
+      if (pendingToolResults && pendingToolResults.length > 0) {
+        const isAnthropic = this.modelProvider.getProviderName() === 'anthropic';
+        if (isAnthropic) {
+          // Find the last assistant message with tool_use blocks
+          let lastAssistantIndex = this.messages.length - 1;
+          while (lastAssistantIndex >= 0) {
+            const msg = this.messages[lastAssistantIndex];
+            if (msg.role === 'assistant' && msg.content_blocks) {
+              // Check if this assistant message has tool_use blocks
+              const toolUseBlocks = msg.content_blocks.filter((block: any) => block.type === 'tool_use');
+              if (toolUseBlocks.length > 0) {
+                // Verify that all pending tool results have matching tool_use_ids
+                const toolUseIds = new Set(toolUseBlocks.map((block: any) => block.id));
+                const validToolResults = pendingToolResults.filter(tr => 
+                  tr.toolUseId && toolUseIds.has(tr.toolUseId)
+                );
+                
+                if (validToolResults.length > 0) {
+                  // Check if we already have a tool_results message after this assistant
+                  let toolResultsIndex = lastAssistantIndex + 1;
+                  if (toolResultsIndex < this.messages.length && 
+                      this.messages[toolResultsIndex].role === 'user' && 
+                      this.messages[toolResultsIndex].tool_results) {
+                    // Add to existing tool_results message
+                    for (const tr of validToolResults) {
+                      this.messages[toolResultsIndex].tool_results!.push({
+                        type: 'tool_result',
+                        tool_use_id: tr.toolUseId!,
+                        content: tr.content,
+                      });
+                    }
+                  } else {
+                    // Create new tool_results message
+                    const toolResultsMessage: Message = {
+                      role: 'user',
+                      content: '',
+                      tool_results: validToolResults.map(tr => ({
+                        type: 'tool_result',
+                        tool_use_id: tr.toolUseId!,
+                        content: tr.content,
+                      })),
+                    };
+                    this.messages.splice(toolResultsIndex, 0, toolResultsMessage);
+                  }
+                }
+                break;
+              }
+            }
+            lastAssistantIndex--;
+          }
+        } else {
+          // OpenAI: add tool role messages
+          for (const tr of pendingToolResults) {
+            if (tr.toolCallId) {
+              const toolMessage: Message = {
+                role: 'tool',
+                tool_call_id: tr.toolCallId,
+                content: tr.content,
+              };
+              this.messages.push(toolMessage);
+            }
+          }
+        }
+      }
+      
+      // Check if query was cancelled - messages are kept visible even when aborted
+      if (cancellationCheck && cancellationCheck()) {
+        // Keep messages and token count as-is so user can see the partial response
+        return this.messages;
+      }
 
       // Always update token count using official API after stream completes
       // This ensures accurate counts including images/attachments
-      if (this.modelProvider.getProviderName() === 'claude') {
+      if (this.modelProvider.getProviderName() === 'anthropic') {
         const provider = this.modelProvider as any;
         try {
           const exactCount = await provider.countTokensOfficial(
@@ -1450,6 +1673,11 @@ export class MCPClient {
       // Loop until all todos are completed or skipped
       if (this.todoManager.isEnabled()) {
         while (true) {
+          // Check for cancellation before continuing todo loop
+          if (cancellationCheck && cancellationCheck()) {
+            break;
+          }
+          
           const todoStatus = await this.checkTodoStatus();
           if (todoStatus.activeCount === 0) {
             // All todos are complete, ask user what to do
@@ -1491,8 +1719,68 @@ export class MCPClient {
             this.tools,
             8192,
             toolExecutor,
+            undefined, // maxIterations (use default)
+            cancellationCheck, // Pass cancellation check to provider
           );
-          await this.processToolUseStream(continueStream);
+          const pendingToolResults = await this.processToolUseStream(continueStream, cancellationCheck);
+          
+          // Flush any remaining pending tool results
+          if (pendingToolResults && pendingToolResults.length > 0) {
+            const isAnthropic = this.modelProvider.getProviderName() === 'anthropic';
+            if (isAnthropic) {
+              let lastAssistantIndex = this.messages.length - 1;
+              while (lastAssistantIndex >= 0 && this.messages[lastAssistantIndex].role !== 'assistant') {
+                lastAssistantIndex--;
+              }
+              if (lastAssistantIndex >= 0) {
+                let toolResultsIndex = lastAssistantIndex + 1;
+                if (toolResultsIndex < this.messages.length && 
+                    this.messages[toolResultsIndex].role === 'user' && 
+                    this.messages[toolResultsIndex].tool_results) {
+                  for (const tr of pendingToolResults) {
+                    if (tr.toolUseId) {
+                      this.messages[toolResultsIndex].tool_results!.push({
+                        type: 'tool_result',
+                        tool_use_id: tr.toolUseId,
+                        content: tr.content,
+                      });
+                    }
+                  }
+                } else {
+                  const toolResultsMessage: Message = {
+                    role: 'user',
+                    content: '',
+                    tool_results: pendingToolResults
+                      .filter(tr => tr.toolUseId)
+                      .map(tr => ({
+                        type: 'tool_result',
+                        tool_use_id: tr.toolUseId!,
+                        content: tr.content,
+                      })),
+                  };
+                  if (toolResultsMessage.tool_results!.length > 0) {
+                    this.messages.splice(toolResultsIndex, 0, toolResultsMessage);
+                  }
+                }
+              }
+            } else {
+              for (const tr of pendingToolResults) {
+                if (tr.toolCallId) {
+                  const toolMessage: Message = {
+                    role: 'tool',
+                    tool_call_id: tr.toolCallId,
+                    content: tr.content,
+                  };
+                  this.messages.push(toolMessage);
+                }
+              }
+            }
+          }
+          
+          // Check if query was cancelled
+          if (cancellationCheck && cancellationCheck()) {
+            break;
+          }
           
           // Extract and log assistant response to reminder message
           const messagesAfterReminder = this.messages;

@@ -159,19 +159,26 @@ export class OpenAIProvider implements ModelProvider {
   }
 
   getDefaultModel(): string {
-    return 'gpt-5';
+    return 'gpt-5-mini';
   }
 
   getContextWindow(model: string): number {
-    // Only use API-provided context windows from cache
+    // First try API-provided context windows from cache
     if (this.contextWindowCache.has(model)) {
       return this.contextWindowCache.get(model)!;
     }
     
-    // No fallback - context window must be fetched from API first
-    throw new Error(
-      `Context window for model "${model}" not available. Please call listAvailableModels() first to fetch model information from the API.`
-    );
+    // Fallback to hardcoded values (same as before commit e4a8d3d)
+    // This is necessary because OpenAI's models.list() doesn't include context window info
+    // Use the same fallback logic as before: model -> gpt-5 -> 200000
+    const contextWindow = 
+      OPENAI_MODEL_CONTEXT_WINDOWS[model] ||
+      OPENAI_MODEL_CONTEXT_WINDOWS['gpt-5'] ||
+      200000;
+    
+    // Cache it for future use
+    this.contextWindowCache.set(model, contextWindow);
+    return contextWindow;
   }
 
   getToolType(): any {
@@ -190,10 +197,15 @@ export class OpenAIProvider implements ModelProvider {
       contextWindow = this.contextWindowCache.get(model);
     }
     
+    // If still not available, try to get from hardcoded fallback
     if (!contextWindow) {
-      throw new Error(
-        `Context window for model "${model}" not available from API. Please ensure the model exists and is accessible.`
-      );
+      try {
+        contextWindow = this.getContextWindow(model);
+      } catch {
+        throw new Error(
+          `Context window for model "${model}" not available from API or fallback. Please ensure the model exists and is accessible.`
+        );
+      }
     }
     
     return new OpenAITokenCounter(model, config, contextWindow);
@@ -386,6 +398,7 @@ export class OpenAIProvider implements ModelProvider {
     maxTokens: number,
     toolExecutor: ToolExecutor,
     maxIterations: number = 10,
+    cancellationCheck?: () => boolean,
   ): AsyncIterable<MessageStreamEvent | { type: 'tool_use_complete'; toolName: string; result: string }> {
     // Convert generic Tool[] to OpenAI function format
     const openaiTools = tools.map((tool) => ({
@@ -399,8 +412,20 @@ export class OpenAIProvider implements ModelProvider {
 
     let conversationMessages = [...messages];
     let iterations = 0;
+    let hasPendingToolResults = false; // Track if we have tool results that need to be sent
 
     while (iterations < maxIterations) {
+      // Check for cancellation at start of each iteration (after previous one completed)
+      // If we have pending tool results, do ONE MORE iteration to send them to the agent
+      if (cancellationCheck && cancellationCheck()) {
+        if (!hasPendingToolResults) {
+          // No pending results, safe to break immediately
+          break;
+        }
+        // We have pending tool results - continue this iteration to send them
+        // After this iteration completes, we'll break regardless
+      }
+
       iterations++;
 
       // Step 1: Stream request to OpenAI
@@ -549,6 +574,19 @@ export class OpenAIProvider implements ModelProvider {
           : undefined,
       });
 
+      // If we just sent pending tool results and are cancelled, break now
+      if (hasPendingToolResults && cancellationCheck && cancellationCheck()) {
+        // We've sent the tool results to the agent and got a response
+        // Yield message_stop before breaking
+        yield {
+          type: 'message_stop',
+        } as MessageStreamEvent;
+        break;
+      }
+
+      // Reset the flag - if there were pending results, they've now been sent
+      hasPendingToolResults = false;
+
       // Yield token usage from response (OpenAI provides exact counts in final chunk when stream_options.include_usage is true)
       // Always yield if we have usage data - use finalUsage from stream or fallback to response.usage
       const usageToYield = finalUsage || response.usage;
@@ -598,6 +636,7 @@ export class OpenAIProvider implements ModelProvider {
           yield {
             type: 'tool_use_complete',
             toolName: functionCall.name,
+            toolCallId: toolCall.id,
             result: result,
           };
 
@@ -633,6 +672,10 @@ export class OpenAIProvider implements ModelProvider {
         });
       }
 
+      // Mark that we have pending tool results to send
+      // Even if cancelled, we need one more iteration to send these to the agent
+      hasPendingToolResults = true;
+
       // Step 6: Loop continues - the next iteration will:
       // - Make another API call with tool results in conversationMessages
       // - The model will see the tool outputs and provide the final response
@@ -664,7 +707,7 @@ export class OpenAIProvider implements ModelProvider {
             console.warn('Warning: OpenAI does not support PDF attachments. Converting to text representation.');
             return {
               type: 'text' as const,
-              text: `[PDF File: document.pdf]\n⚠️  PDF attachments are not supported by OpenAI. Please use Claude provider for PDF support, or convert the PDF to images/text before attaching.`,
+              text: `[PDF File: document.pdf]\n⚠️  PDF attachments are not supported by OpenAI. Please use Anthropic provider for PDF support, or convert the PDF to images/text before attaching.`,
             };
           }
 
@@ -825,13 +868,22 @@ export class OpenAIProvider implements ModelProvider {
           // Check if model object has context_window or similar field
           if ('context_window' in model && typeof (model as any).context_window === 'number') {
             contextWindow = (model as any).context_window;
-            this.contextWindowCache.set(modelId, contextWindow);
+            // Only cache when defined
+            if (contextWindow !== undefined) {
+              this.contextWindowCache.set(modelId, contextWindow);
+            }
           } else if ('max_context_length' in model && typeof (model as any).max_context_length === 'number') {
             contextWindow = (model as any).max_context_length;
+            // Only cache when defined
+            if (contextWindow !== undefined) {
+              this.contextWindowCache.set(modelId, contextWindow);
+            }
+          }
+          // If API doesn't provide context window, use fallback from hardcoded values
+          if (contextWindow === undefined && modelId in OPENAI_MODEL_CONTEXT_WINDOWS) {
+            contextWindow = OPENAI_MODEL_CONTEXT_WINDOWS[modelId];
             this.contextWindowCache.set(modelId, contextWindow);
           }
-          // If API doesn't provide context window, we don't set it
-          // User will need to provide it or it will error when getContextWindow is called
           
           let description = '';
           let capabilities: string[] = ['text', 'tools'];
