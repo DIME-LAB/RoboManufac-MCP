@@ -11,7 +11,7 @@ def identify_valid_grasp_points() -> str:
 
 You are working in a sim environment
 
-Get topics to find the objects available in the scene.
+Get topics to find the objects available in the scene. Save scene state.
 
 Identify available grasp ids per object.
 
