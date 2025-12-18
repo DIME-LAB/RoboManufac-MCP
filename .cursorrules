@@ -1,0 +1,180 @@
+# Cursor Rules for RoboManufac-MCP
+
+## Repository Overview
+This is a robotics manufacturing project using Model Context Protocol (MCP) to connect Isaac Sim, ROS2, UR robots, and AI agents. The repository contains multiple MCP servers and clients for robotic manipulation and assembly tasks.
+
+## Git Workflow Guidelines
+
+### Before Making Changes
+1. **Always check repository sync status**: Before starting work, verify your local branch is in sync with the remote:
+   ```bash
+   git fetch origin
+   git status
+   ```
+2. **Check for missing commits**: If the user mentions a commit is missing, fetch from origin and check:
+   ```bash
+   git fetch origin
+   git log --oneline origin/main -10
+   git log --oneline HEAD -10
+   ```
+3. **Update local branch**: If behind remote, pull the latest changes:
+   ```bash
+   git pull
+   ```
+
+### Remote Management
+- Keep only the `origin` remote (GitHub). Remove any local path remotes that were set up for development.
+- To check remotes: `git remote -v`
+- To remove a remote: `git remote remove <remote-name>`
+- Temporary remotes for cherry-picking should be removed after use
+
+### Branch Management
+- Default branch is `main`
+- Always work on feature branches for new work
+- Keep local branches in sync with their remote tracking branches
+
+### Cherry-Picking from External Repositories
+When cherry-picking commits from external repositories in the Documents folder:
+1. **Add temporary remote**: Add the external repo as a temporary remote:
+   ```bash
+   git remote add <temp-name> /path/to/external/repo
+   ```
+2. **Fetch from remote**: Fetch the latest commits:
+   ```bash
+   git fetch <temp-name>
+   ```
+3. **Apply changes to correct folder**: Since external repos have files at root but this repo has them in subfolders:
+   - Use `git show <remote>/<branch>:<file>` to extract files
+   - Apply to the correct subfolder path (e.g., `mcp-server-example/`, `ros-mcp-server/`, `mcp-client-example/`)
+4. **Commit changes**: Stage and commit with descriptive message:
+   ```bash
+   git add <folder>/
+   git commit -m "Cherry-pick: <original commit message>"
+   ```
+5. **Clean up**: Remove the temporary remote:
+   ```bash
+   git remote remove <temp-name>
+   ```
+
+## Repository Structure
+
+### Key Components
+- **mcp-client-example/**: TypeScript MCP client with chat history, attachments, and todo management
+- **mcp-server-example/**: Python MCP server with resource management and tool examples
+- **ros-mcp-server/**: ROS2 MCP server with robot primitives (gripper control, IK, movement, assembly)
+- **isaac-sim-mcp/**: Isaac Sim MCP extension for 3D simulation
+- **aruco-grasp-annotator/**: Tools for ArUco marker annotation and grasp point generation
+- **asu-ur5e-dt/**: Digital Twin extension for UR5e robot in Isaac Sim
+- **todo-list-mcp/**: Todo management MCP server
+
+### Configuration Files
+- `mcp-client-example/mcp_config.json`: MCP server paths and Python executables
+- `ros-mcp-server/SERVER_PATHS_CFG.yaml`: IP addresses, ROS workspace paths, primitive controller paths
+- `asu-ur5e-dt/exts/DigitalTwin/DigitalTwin/ASSET_PATHS.yaml`: Asset paths for robot, gripper, camera, objects
+
+## Technology Stack
+
+### Languages & Frameworks
+- **Python**: Primary language for MCP servers and ROS2 integration
+- **TypeScript**: MCP client implementation
+- **ROS2 Humble**: Robot operating system
+- **Isaac Sim 5.1**: NVIDIA's robotics simulation platform
+- **MCP (Model Context Protocol)**: Protocol for AI agent integration
+
+### Key Dependencies
+- `python-box`: Configuration management
+- `uv`: Python package manager (used in multiple subprojects)
+- Node.js: For TypeScript MCP client
+
+## Code Style & Best Practices
+
+### Python
+- Use type hints where appropriate
+- Follow PEP 8 style guidelines
+- Use `uv` for dependency management in Python projects
+- Keep ROS2 message types in `ros-mcp-server/msgs/` for compatibility
+- Use absolute imports when possible (e.g., `from primitives.utils import ...`)
+
+### TypeScript
+- Use strict TypeScript configuration
+- Follow existing patterns in `mcp-client-example/src/`
+- Maintain separation of concerns (providers, managers, tools)
+- Handle keyboard interrupts and cancellation gracefully
+
+### File Organization
+- Keep data files in `data/` directories
+- Configuration files should use relative paths where possible
+- USD files for Isaac Sim in `data/usd/`
+- JSON configuration files for assemblies, grasps, ArUco markers
+
+## Common Tasks
+
+### Setting Up Development Environment
+1. Check git status and sync with remote
+2. Verify all configuration files have correct paths
+3. Ensure Python environments are set up (use `uv` where applicable)
+4. Check that ROS2 workspace is sourced
+
+### Adding New Robot Primitives
+- Add to `ros-mcp-server/primitives/`
+- Update server tools in `ros-mcp-server/server.py`
+- Ensure proper error handling and logging
+- Test with both simulation and real robot
+- Support environment variables for configurable paths (e.g., `MCP_CLIENT_OUTPUT_DIR`)
+
+### MCP Server Development
+- Follow MCP protocol specifications
+- Implement proper tool registration
+- Handle errors gracefully
+- Use appropriate logging levels
+- Support cancellation and abort functionality
+
+### Configuration Management
+- Use relative paths in configuration files when possible
+- Document required environment variables
+- Keep sensitive data out of version control
+- Support configurable output directories via environment variables
+
+## Debugging & Troubleshooting
+
+### Git Issues
+- If commits are missing, always fetch first: `git fetch origin`
+- Check branch tracking: `git branch -vv`
+- Verify remote configuration: `git remote -v`
+- When cherry-picking, ensure files are applied to correct subfolder paths
+
+### MCP Connection Issues
+- Verify paths in `mcp_config.json` are correct
+- Check Python executable paths
+- Ensure MCP servers are running and accessible
+- Check for proper cancellation handling in providers
+
+### ROS2 Integration
+- Verify ROS2 workspace is sourced
+- Check IP addresses in `SERVER_PATHS_CFG.yaml`
+- Ensure rosbridge is running for websocket communication
+- Verify gripper control and stabilization timeouts are appropriate
+
+## Recent Updates & Patterns
+
+### Gripper Control
+- Supports half-open command (30mm)
+- Improved stabilization and final width tracking with better timeout handling
+- Logging consistently uses mm units
+
+### Reorient API
+- Simplified `reorient_for_assembly` API (removed direct target_object_orientation mode)
+- New `reorient_object` tool for standalone object reorientation
+- `translate_for_assembly` supports `final_base_pos` and `final_base_orientation` parameters
+
+### Client Features
+- Keyboard abort functionality with 'a' key during query execution
+- Cancellation support in both Anthropic and OpenAI providers
+- Proper terminal state restoration after abort
+
+## Notes
+- The repository uses multiple remotes during development (local paths), but should only have `origin` in production
+- Assembly data is stored in JSON format in `aruco-grasp-annotator/data/`
+- USD files represent 3D models and scenes for Isaac Sim
+- ArUco markers are used for object localization and pose estimation
+- External repositories in Documents folder can be used as sources for cherry-picking updates
