@@ -19,17 +19,35 @@ RESOURCES_DIR.mkdir(parents=True, exist_ok=True)
 
 # ========== HELPER FUNCTIONS ==========
 
+def normalize_assembly_id(assembly_id: str) -> str:
+    """Normalize assembly_id by removing any 'Assembly' or 'assembly' prefix"""
+    # Remove 'Assembly' or 'assembly' prefix if present
+    if assembly_id.startswith("Assembly"):
+        normalized = assembly_id[8:]  # Remove "Assembly" (8 chars)
+    elif assembly_id.startswith("assembly"):
+        normalized = assembly_id[8:]  # Remove "assembly" (8 chars)
+    else:
+        normalized = assembly_id
+    
+    # Remove leading underscores if any
+    normalized = normalized.lstrip("_")
+    
+    return normalized
+
 def get_grasp_log_file(assembly_id: str) -> Path:
     """Get the grasp log file path for a specific assembly"""
-    return RESOURCES_DIR / f"Assembly{assembly_id}_grasp_log.json"
+    normalized_id = normalize_assembly_id(assembly_id)
+    return RESOURCES_DIR / f"Assembly_{normalized_id}_grasp_log.json"
 
 def get_assembly_file(assembly_id: str) -> Path:
     """Get the assembly sequence log file path for a specific assembly"""
-    return RESOURCES_DIR / f"Assembly{assembly_id}_sequence_log.json"
+    normalized_id = normalize_assembly_id(assembly_id)
+    return RESOURCES_DIR / f"Assembly_{normalized_id}_sequence_log.json"
 
 def get_final_sequence_file(assembly_id: str) -> Path:
     """Get the final sequence file path for a specific assembly"""
-    return RESOURCES_DIR / f"Assembly{assembly_id}_final_sequence.json"
+    normalized_id = normalize_assembly_id(assembly_id)
+    return RESOURCES_DIR / f"Assembly_{normalized_id}_final_sequence.json"
 
 def load_grasp_resource(assembly_id: str):
     """Load grasp resource from JSON file for a specific assembly"""
@@ -111,7 +129,7 @@ def save_final_sequence(assembly_id: str, data):
 
 @mcp.resource("Assembly{assembly_id}/object_name/{object_name}/grasp_configs")
 def get_object_grasp_configs(assembly_id: str, object_name: str) -> str:
-    """Get grasp configurations for an object in a specific assembly (list of grasp_id, gripper_state, and status). Each config includes grasp_id (int), gripper_state ("open" or "half-open"), and status ("SUCCESS" or "FAILURE")."""
+    """Get grasp configurations for an object in a specific assembly (list of grasp_id, gripper_state, and status). Each config includes grasp_id (int), gripper_state ("open" or "half-open"), and status ("SUCCESS" or "FAILURE"). IMPORTANT: The gripper must be set to the specified gripper_state BEFORE moving to grasp to access the grasp_id."""
     data = load_grasp_resource(assembly_id)
     obj_data = data.get(object_name, [])
     
@@ -122,7 +140,7 @@ def get_object_grasp_configs(assembly_id: str, object_name: str) -> str:
 
 @mcp.resource("Assembly{assembly_id}/object_name/{object_name}/grasp_configs/{grasp_id}/status")
 def get_object_status_for_id(assembly_id: str, object_name: str, grasp_id: str) -> str:
-    """Get all configurations (grasp_id, gripper_state, and status) for a specific grasp_id of an object_name in an assembly. Returns all attempts (both SUCCESS and FAILURE) with their modes."""
+    """Get all configurations (grasp_id, gripper_state, and status) for a specific grasp_id of an object_name in an assembly. Returns all attempts (both SUCCESS and FAILURE) with their modes. IMPORTANT: The gripper must be set to the specified gripper_state BEFORE moving to grasp to access the grasp_id."""
     data = load_grasp_resource(assembly_id)
     obj_data = data.get(object_name, [])
     grasp_id_int = int(grasp_id)
@@ -181,6 +199,9 @@ def read_grasp_resource(assembly_id: str, object_name: str) -> str:
     Returns:
         JSON string containing grasp_configs list with grasp_id, gripper_state, and status (includes both SUCCESS and FAILURE attempts)
         Each config has: {"grasp_id": <int>, "gripper_state": "open"|"half-open", "status": "SUCCESS"|"FAILURE"}
+    
+    IMPORTANT: The gripper must be set to the specified gripper_state BEFORE moving to grasp to access the grasp_id.
+    The sequence should be: 1) Set gripper to the gripper_state (open or half-open), 2) Move to grasp position, 3) Execute grasp using the grasp_id.
     """
     data = load_grasp_resource(assembly_id)
     obj_data = data.get(object_name, [])
@@ -327,6 +348,8 @@ def list_grasp_resource(assembly_id: str) -> str:
     
     Returns:
         JSON string containing object names for the assembly
+    
+    Note: When using grasp configurations from this resource, remember that the gripper must be set to the specified gripper_state BEFORE moving to grasp to access the grasp_id.
     """
     data = load_grasp_resource(assembly_id)
     
@@ -371,7 +394,7 @@ def write_assembly_resource(assembly_id: str, sequence: list) -> str:
     Args:
         assembly_id: The ID of the assembly
         sequence: List of objects in the sequence, each with sequence_id (fixed), object_name (fixed), and primitives_trials
-                  Example: [{"sequence_id": 1, "object_name": "line_brown", "primitives_trials": [{"trial_id": 1, "grasp_id": 1, "gripper_state": "half-open", "primitives": ["grasp", "move", "place"], "status": "SUCCESS"}]}, ...]
+                  Example: [{"sequence_id": 1, "object_name": "line_brown", "primitives_trials": [{"trial_id": 1, "grasp_id": 1, "gripper_state": "open", "primitives": ["primitive_name_1", "primitive_name_2", "primitive_name_3"], "status": "SUCCESS"}]}, ...]
                   - sequence_id: integer (required, fixed)
                   - object_name: string (required, fixed)
                   - primitives_trials: list of trial objects (required), each with:
@@ -647,15 +670,16 @@ def list_assembly_resource() -> str:
     Returns:
         JSON string containing all assembly IDs
     """
-    # Find all Assembly{id}_sequence_log.json files
-    assembly_files = list(RESOURCES_DIR.glob("Assembly*_sequence_log.json"))
+    # Find all Assembly_{id}_sequence_log.json files
+    assembly_files = list(RESOURCES_DIR.glob("Assembly_*_sequence_log.json"))
     assembly_ids = []
     
     for file in assembly_files:
-        # Extract assembly ID from filename like "Assembly1_sequence_log.json"
-        name = file.stem  # "Assembly1_sequence_log"
-        if name.startswith("Assembly") and name.endswith("_sequence_log"):
-            assembly_id = name.replace("Assembly", "").replace("_sequence_log", "")
+        # Extract assembly ID from filename like "Assembly_1_sequence_log.json"
+        name = file.stem  # "Assembly_1_sequence_log"
+        if name.startswith("Assembly_") and name.endswith("_sequence_log"):
+            # Remove "Assembly_" prefix and "_sequence_log" suffix
+            assembly_id = name.replace("Assembly_", "").replace("_sequence_log", "")
             assembly_ids.append(assembly_id)
     
     return json.dumps({

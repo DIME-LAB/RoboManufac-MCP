@@ -22,6 +22,7 @@ import yaml
 import threading
 import glob
 import math
+import re
 from scipy.spatial.transform import Rotation as R
 
 from .og_setup import OmniGraphSetup, GripperOmniGraphSetup
@@ -550,22 +551,57 @@ class DigitalTwin(omni.ext.IExt):
     def _sample_non_overlapping_objects(
         self,
         num_objects,
-        x_range=(-0.12, 0.12),
-        y_range=(0.0, 0.25),
-        min_sep=0.075,
+        x_range=(-0.2, 0.6),
+        y_range=(-0.6, -0.3),
+        min_sep=0.2,
         yaw_range=(0.0, 180.0),
-        z=0.0495,
+        z_values=None,
+        fixed_positions=None,
         max_attempts=10_000,
     ):
+        """
+        Sample non-overlapping object poses in world frame.
+        
+        Args:
+            num_objects: Number of objects to place
+            x_range: X position range in world frame (default: -0.5 to 0.5)
+            y_range: Y position range in world frame (default: -0.5 to 0.0)
+            min_sep: Minimum separation between objects
+            yaw_range: Yaw rotation range in degrees
+            z_values: List of Z values for each object (preserves current Z)
+            fixed_positions: List of fixed positions (e.g., base objects) to avoid
+            max_attempts: Maximum placement attempts
+        """
         poses, attempts = [], 0
+        # Convert fixed positions to numpy arrays for distance checking
+        fixed_xy = []
+        if fixed_positions:
+            for pos in fixed_positions:
+                if isinstance(pos, (list, tuple, np.ndarray)):
+                    fixed_xy.append(np.array(pos[:2]))  # Only X, Y
+                elif hasattr(pos, '__getitem__'):
+                    fixed_xy.append(np.array([pos[0], pos[1]]))
+        
         while len(poses) < num_objects and attempts < max_attempts:
             attempts += 1
             candidate_xy = np.array([
                 np.random.uniform(*x_range),
                 np.random.uniform(*y_range)
             ])
-            if all(np.linalg.norm(candidate_xy - p["position"][:2]) >= min_sep for p in poses):
+            # Check separation against both existing poses AND fixed positions
+            valid = True
+            # Check against existing randomized poses
+            if any(np.linalg.norm(candidate_xy - p["position"][:2]) < min_sep for p in poses):
+                valid = False
+            # Check against fixed positions (base objects)
+            if valid and fixed_xy:
+                if any(np.linalg.norm(candidate_xy - fixed) < min_sep for fixed in fixed_xy):
+                    valid = False
+            
+            if valid:
                 yaw_deg = np.random.uniform(*yaw_range)
+                # Use provided Z value or default
+                z = z_values[len(poses)] if z_values and len(poses) < len(z_values) else 0.0495
                 poses.append({
                     "position": np.array([candidate_xy[0], candidate_xy[1], z]),
                     "yaw_deg": yaw_deg
@@ -575,10 +611,17 @@ class DigitalTwin(omni.ext.IExt):
         return poses
 
     def _set_obj_prim_pose(self, prim_path, position, quat_wxyz):
+        import omni.kit.commands
+        # Handle both Gf.Vec3d and tuple/list positions
+        if isinstance(position, Gf.Vec3d):
+            pos_value = position
+        else:
+            pos_value = Gf.Vec3d(*position)
+        
         omni.kit.commands.execute(
             "ChangeProperty",
             prop_path=f"{prim_path}.xformOp:translate",
-            value=Gf.Vec3d(*position),
+            value=pos_value,
             prev=None,
         )
         omni.kit.commands.execute(
@@ -589,26 +632,108 @@ class DigitalTwin(omni.ext.IExt):
         )
 
     def randomize_object_poses(self, folder_path="/World/Objects"):
+        """
+        Randomize object poses in world frame, then transform to local child prim frame.
+        Randomizes position of /World/Objects/{object_name} in world coordinates,
+        then applies the appropriate local transform to the child prim.
+        """
         stage = omni.usd.get_context().get_stage()
         objects_root = stage.GetPrimAtPath(folder_path)
         if not objects_root.IsValid():
             print(f"Warning: {folder_path} does not exist")
             return
 
-        body_paths = []
+        # Collect object info: parent path, child path, parent's current world position, and child's current Z
+        # Also collect base object positions to respect during randomization
+        object_info = []
+        base_positions = []  # Store base object world positions
+        
         for child in objects_root.GetChildren():
             obj = child.GetName()
-            nested_path = f"{folder_path}/{obj}/{obj}/{obj}"
-            nested_prim = stage.GetPrimAtPath(nested_path)
-            if nested_prim.IsValid():
-                body_paths.append(nested_path)
-                print(f"Found: {nested_path}")
+            parent_path = f"{folder_path}/{obj}"
+            child_path = f"{folder_path}/{obj}/{obj}/{obj}"
+            
+            parent_prim = stage.GetPrimAtPath(parent_path)
+            child_prim = stage.GetPrimAtPath(child_path)
+            
+            if not parent_prim.IsValid() or not child_prim.IsValid():
+                continue
+            
+            # Get child's current world transform
+            child_xform = UsdGeom.Xformable(child_prim)
+            child_world_transform = child_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+            child_world_pos = child_world_transform.ExtractTranslation()
+            
+            # Check if this is a base object (matches pattern base{id})
+            if re.match(r'^base\d+$', obj):
+                # Store base position for separation checking
+                base_positions.append(child_world_pos)
+                print(f"Skipping {obj} (matches base{{id}} pattern) at world pos: ({child_world_pos[0]:.3f}, {child_world_pos[1]:.3f}, {child_world_pos[2]:.3f})")
+                continue
+            
+            # Get parent's current world transform and position
+            parent_xform = UsdGeom.Xformable(parent_prim)
+            parent_world_transform = parent_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+            parent_world_pos = parent_world_transform.ExtractTranslation()
+            
+            object_info.append({
+                "parent_path": parent_path,
+                "child_path": child_path,
+                "parent_world_pos": parent_world_pos,
+                "parent_world_transform": parent_world_transform,
+                "current_z": child_world_pos[2]
+            })
+            print(f"Found: {child_path}")
+            print(f"  Parent world pos: ({parent_world_pos[0]:.3f}, {parent_world_pos[1]:.3f}, {parent_world_pos[2]:.3f})")
+            print(f"  Child world pos: ({child_world_pos[0]:.3f}, {child_world_pos[1]:.3f}, {child_world_pos[2]:.3f})")
 
-        poses = self._sample_non_overlapping_objects(num_objects=len(body_paths))
-        for path, pose in zip(body_paths, poses):
+        if not object_info:
+            print("No valid objects found")
+            return
+
+        # Get Z values for preserving current heights
+        z_values = [info["current_z"] for info in object_info]
+        
+        # Randomize positions in world frame
+        # Pass base positions so randomization respects them for minimum separation
+        poses = self._sample_non_overlapping_objects(
+            num_objects=len(object_info),
+            z_values=z_values,
+            fixed_positions=base_positions
+        )
+        
+        if base_positions:
+            print(f"Randomization will respect {len(base_positions)} base object positions for minimum separation")
+
+        # Apply randomized poses
+        for obj_info, pose in zip(object_info, poses):
+            parent_path = obj_info["parent_path"]
+            child_path = obj_info["child_path"]
+            parent_world_transform = obj_info["parent_world_transform"]
+            parent_world_pos = obj_info["parent_world_pos"]
+            
+            # Target world position (randomized)
+            target_world_pos = Gf.Vec3d(pose["position"][0], pose["position"][1], pose["position"][2])
+            
+            # Calculate local position relative to parent
+            # The parent's world transform already accounts for its current position
+            # Local = Parent^-1 * Target_World
+            # This correctly transforms the target world position to local coordinates
+            # accounting for where the parent currently is
+            parent_inverse = parent_world_transform.GetInverse()
+            local_pos = parent_inverse.Transform(target_world_pos)
+            
+            # Convert yaw to quaternion
             quat_xyzw = R.from_euler("xyz", [0.0, 0.0, pose["yaw_deg"]], degrees=True).as_quat()
             quat_wxyz = np.roll(quat_xyzw, 1)
-            self._set_obj_prim_pose(path, pose["position"], quat_wxyz)
+            
+            # Apply local transform to child prim (parent prim stays unchanged)
+            self._set_obj_prim_pose(child_path, local_pos, quat_wxyz)
+            
+            print(f"Randomized {child_path}:")
+            print(f"  Parent world pos (unchanged): ({parent_world_pos[0]:.3f}, {parent_world_pos[1]:.3f}, {parent_world_pos[2]:.3f})")
+            print(f"  Target world pos: ({target_world_pos[0]:.3f}, {target_world_pos[1]:.3f}, {target_world_pos[2]:.3f})")
+            print(f"  Child local pos: ({local_pos[0]:.3f}, {local_pos[1]:.3f}, {local_pos[2]:.3f})")
 
     
     def add_objects(self):

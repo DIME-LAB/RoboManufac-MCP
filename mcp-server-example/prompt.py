@@ -49,16 +49,17 @@ Restore scene state (reset the positions of the object so you can perform the ac
 @mcp.prompt()
 def primitive_def_prompt() -> str:
     return """I will define a set of Motion Primitives that can be achieved using tools available to you.:
+
 Primitive - Grasp: Open or Half-Open the gripper.
 Move to Grasp the object by selecting a Grasp ID and Close Gripper. 
 Move to safe height.
 
-Primitive - Assemble Component: Translate for Assembly, Rotate for Assembly, Perform Insert, Half Open Gripper.
+Primitive - Assemble Component: Translate for Assembly, Reorient for Assembly, Perform Insert, Half Open Gripper, Move to safe height.
 
 Primitive - Reorient: Reorient for Assembly
 
 Primitive - Reorient and Regrasp: Reorient for Assembly, Move to Clear Space. 
-Move Down and Open Gripper. Move to Safe Height. Hover over Clear Space. Perform Grasp again. 
+Move Down and Open Gripper. Move to Safe Height. Hover over Clear Space. Perform Grasp. 
 """
 
 
@@ -107,25 +108,13 @@ Record the Grasp ID you used and compare to judge success or failure.
 
 @mcp.prompt()
 def level2_system_prompt():
-    return"""You are using Sim environment.
-Before starting any task, get_topics to find the objects available in the scene. 
+    return"""
+You are using Sim environment.
+Before starting any task, get_topics to find the objects available in the scene. Save current scene state.
 Then identify available grasp ids per object from your available resources.
 
-Once the overall task is done, use the Assembly Resource to record the sequence in which it has to finish the tasks.
-"""
-
-@mcp.prompt()
-def level2_assembly_prompt_v1() -> str:
-    """
-    Returns a prompt with generalized instructions for manipulating and 
-    assembling objects using pre-defined motion primitives.
-    
-    :return: Description
-    :rtype: str
-    """
-    return"""There are a number of assembly objects in the simulation environment. 
-
 Your goal is to assemble the objects with the base in the given sequence.
+You are to figure out the sequence of primitives to be executed in order for each object in the sequence.
 
 The object sequence for assembly is:
 1) line_red
@@ -133,7 +122,24 @@ The object sequence for assembly is:
 3) fork_yellow
 4) fork_orange
 
-As you assemble the parts, log your findings in the resources.
+Once you think youve assembled an object, verify final pose assembly.
+If your sequence for an object was a success, save scene state after the object is assembled.
+If your sequence for an object was a failure, restore scene state to the state before the object was assembled and retry.
+
+As you assemble the parts, log your findings in the resources - Both success and failure.
+"""
+
+@mcp.prompt()
+def level2_assembly_prompt_v1() -> str:
+    """
+    Returns a prompt with generalized instructions for manipulating and 
+    assembling objects using pre-defined motion primitives.
+
+    :return: Description
+    :rtype: str
+    """
+    return"""
+    
 """
 
 
