@@ -22,6 +22,7 @@ import yaml
 import threading
 import glob
 import math
+from scipy.spatial.transform import Rotation as R
 
 from .og_setup import OmniGraphSetup, GripperOmniGraphSetup
 from .og_camera_setup import CameraOmniGraphSetup
@@ -79,6 +80,9 @@ class DigitalTwin(omni.ext.IExt):
                     with ui.HStack(spacing=5):
                         ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
                         ui.Button("Refresh Graphs", width=120, height=35, clicked_fn=self.refresh_graphs)
+
+            with ui.CollapsableFrame(title="RANDOMIZE OBJ POSES", collapsed=False, height=0):
+                ui.Button("Randomize Object Poses", width=250, height=35, clicked_fn=self.randomize_object_poses)
 
             with ui.CollapsableFrame(title="UR5e Control", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
@@ -543,6 +547,70 @@ class DigitalTwin(omni.ext.IExt):
 
 
     # ---------------------------------- OBJECTS SETUP ----------------------------------
+    def _sample_non_overlapping_objects(
+        self,
+        num_objects,
+        x_range=(-0.12, 0.12),
+        y_range=(0.0, 0.25),
+        min_sep=0.075,
+        yaw_range=(0.0, 180.0),
+        z=0.0495,
+        max_attempts=10_000,
+    ):
+        poses, attempts = [], 0
+        while len(poses) < num_objects and attempts < max_attempts:
+            attempts += 1
+            candidate_xy = np.array([
+                np.random.uniform(*x_range),
+                np.random.uniform(*y_range)
+            ])
+            if all(np.linalg.norm(candidate_xy - p["position"][:2]) >= min_sep for p in poses):
+                yaw_deg = np.random.uniform(*yaw_range)
+                poses.append({
+                    "position": np.array([candidate_xy[0], candidate_xy[1], z]),
+                    "yaw_deg": yaw_deg
+                })
+        if len(poses) < num_objects:
+            raise RuntimeError("Could not place all objects without violating min_sep; reduce density.")
+        return poses
+
+    def _set_obj_prim_pose(self, prim_path, position, quat_wxyz):
+        omni.kit.commands.execute(
+            "ChangeProperty",
+            prop_path=f"{prim_path}.xformOp:translate",
+            value=Gf.Vec3d(*position),
+            prev=None,
+        )
+        omni.kit.commands.execute(
+            "ChangeProperty",
+            prop_path=f"{prim_path}.xformOp:orient",
+            value=Gf.Quatf(*quat_wxyz),
+            prev=None,
+        )
+
+    def randomize_object_poses(self, folder_path="/World/Objects"):
+        stage = omni.usd.get_context().get_stage()
+        objects_root = stage.GetPrimAtPath(folder_path)
+        if not objects_root.IsValid():
+            print(f"Warning: {folder_path} does not exist")
+            return
+
+        body_paths = []
+        for child in objects_root.GetChildren():
+            obj = child.GetName()
+            nested_path = f"{folder_path}/{obj}/{obj}/{obj}"
+            nested_prim = stage.GetPrimAtPath(nested_path)
+            if nested_prim.IsValid():
+                body_paths.append(nested_path)
+                print(f"Found: {nested_path}")
+
+        poses = self._sample_non_overlapping_objects(num_objects=len(body_paths))
+        for path, pose in zip(body_paths, poses):
+            quat_xyzw = R.from_euler("xyz", [0.0, 0.0, pose["yaw_deg"]], degrees=True).as_quat()
+            quat_wxyz = np.roll(quat_xyzw, 1)
+            self._set_obj_prim_pose(path, pose["position"], quat_wxyz)
+
+    
     def add_objects(self):
         """Import all objects from the specified folder into the scene"""
         # Get the folder path from the UI
