@@ -113,8 +113,8 @@ You are using Sim environment.
 Before starting any task, get_topics to find the objects available in the scene. Save current scene state.
 Then identify available grasp ids per object from your available resources.
 
-Your goal is to assemble the objects with the base in the given sequence.
-You are to figure out the sequence of primitives to be executed in order for each object in the sequence.
+Your goal is to assemble the objects with the base.
+You are to figure out the sequence of tools to be executed in order for each object in the sequence.
 
 The object sequence for assembly is:
 1) line_red
@@ -122,9 +122,10 @@ The object sequence for assembly is:
 3) fork_yellow
 4) fork_orange
 
-Once you think youve assembled an object, verify final pose assembly.
+Once you think you've assembled an object, verify final pose assembly.
 If your sequence for an object was a success, save scene state after the object is assembled.
-If your sequence for an object was a failure, restore scene state to the state before the object was assembled and retry.
+If your sequence for an object was a failure, restore scene state to the state before the object was assembled. 
+Reason for failure and retry object manipulation with a different tool sequence which you haven't tried yet for this object.
 
 As you assemble the parts, log your findings in the resources - Both success and failure.
 """

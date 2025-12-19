@@ -2,7 +2,7 @@ from mcp.server.fastmcp import FastMCP
 import json
 import os
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 mcp = FastMCP("FMB Assembly Steps and Grasp IDs Management")
 
@@ -33,6 +33,36 @@ def normalize_assembly_id(assembly_id: str) -> str:
     normalized = normalized.lstrip("_")
     
     return normalized
+
+def validate_assembly_id(assembly_id: str) -> Tuple[bool, str]:
+    """
+    Validate that assembly_id is a pure numeric string (e.g., "3").
+    Rejects inputs with prefixes, spaces, or non-numeric characters.
+    
+    Returns:
+        (is_valid, error_message): Tuple where is_valid is True if valid, False otherwise.
+                                   error_message is empty if valid, otherwise contains error description.
+    """
+    # Strip whitespace
+    assembly_id = assembly_id.strip()
+    
+    # Check if empty
+    if not assembly_id:
+        return False, "assembly_id cannot be empty"
+    
+    # Check if it contains "Assembly" or "assembly" prefix (not allowed)
+    if assembly_id.lower().startswith("assembly"):
+        return False, f"assembly_id must be a numeric ID only, not a prefix (got: '{assembly_id}'). Use format like '3'"
+    
+    # Check if it contains spaces
+    if " " in assembly_id:
+        return False, f"assembly_id must be numeric only and cannot contain spaces (got: '{assembly_id}'). Use format like '3'"
+    
+    # Check if it's purely numeric (only digits)
+    if not assembly_id.isdigit():
+        return False, f"assembly_id must be a numeric ID only (got: '{assembly_id}'). Use format like '3'"
+    
+    return True, ""
 
 def get_grasp_log_file(assembly_id: str) -> Path:
     """Get the grasp log file path for a specific assembly"""
@@ -154,30 +184,30 @@ def get_object_status_for_id(assembly_id: str, object_name: str, grasp_id: str) 
 
 @mcp.resource("Assembly{assembly_id}/sequence")
 def get_assembly_sequence(assembly_id: str) -> str:
-    """Get sequence for a specific Assembly ID. Each item has sequence_id (fixed), object_name (fixed), and primitives_trials (list of trials with trial_id, grasp_id, gripper_state, primitives ordered sequence, and status)."""
+    """Get sequence for a specific Assembly ID. Each item has sequence_id (fixed), object_name (fixed), and tools_trials (list of trials with trial_id, grasp_id, gripper_state, tools ordered sequence, and status)."""
     sequence = load_assembly_resource(assembly_id)
     return json.dumps(sequence, indent=2)
 
-@mcp.resource("Assembly{assembly_id}/sequence/{object_name}/primitives_trials")
-def get_assembly_object_primitives_trials(assembly_id: str, object_name: str) -> str:
-    """Get primitives_trials for a specific object in an assembly sequence. Each trial has trial_id, grasp_id, gripper_state, primitives (ordered sequence), and status."""
+@mcp.resource("Assembly{assembly_id}/sequence/{object_name}/tools_trials")
+def get_assembly_object_tools_trials(assembly_id: str, object_name: str) -> str:
+    """Get tools_trials for a specific object in an assembly sequence. Each trial has trial_id, grasp_id, gripper_state, tools (ordered sequence), and status."""
     sequence = load_assembly_resource(assembly_id)
     
     for item in sequence:
         if item.get("object_name") == object_name:
-            return json.dumps({"primitives_trials": item.get("primitives_trials", [])}, indent=2)
+            return json.dumps({"tools_trials": item.get("tools_trials", [])}, indent=2)
     
     return json.dumps({"error": f"Object '{object_name}' not found in Assembly{assembly_id}"}, indent=2)
 
-@mcp.resource("Assembly{assembly_id}/sequence/{object_name}/primitives_trials/{trial_id}")
+@mcp.resource("Assembly{assembly_id}/sequence/{object_name}/tools_trials/{trial_id}")
 def get_assembly_object_trial(assembly_id: str, object_name: str, trial_id: str) -> str:
-    """Get a specific trial for an object in an assembly sequence. Returns trial_id, grasp_id, gripper_state, primitives (ordered sequence), and status."""
+    """Get a specific trial for an object in an assembly sequence. Returns trial_id, grasp_id, gripper_state, tools (ordered sequence), and status."""
     sequence = load_assembly_resource(assembly_id)
     trial_id_int = int(trial_id)
     
     for item in sequence:
         if item.get("object_name") == object_name:
-            trials = item.get("primitives_trials", [])
+            trials = item.get("tools_trials", [])
             for trial in trials:
                 if trial.get("trial_id") == trial_id_int:
                     return json.dumps(trial, indent=2)
@@ -344,13 +374,20 @@ def list_grasp_resource(assembly_id: str) -> str:
     List all objects in the grasp resource for a specific assembly
     
     Args:
-        assembly_id: The ID of the assembly
+        assembly_id: The ID of the assembly (must be a numeric string, e.g., "3")
     
     Returns:
         JSON string containing object names for the assembly
     
     Note: When using grasp configurations from this resource, remember that the gripper must be set to the specified gripper_state BEFORE moving to grasp to access the grasp_id.
     """
+    # Validate that assembly_id is numeric
+    is_valid, error_message = validate_assembly_id(assembly_id)
+    if not is_valid:
+        return json.dumps({
+            "error": error_message
+        }, indent=2)
+    
     data = load_grasp_resource(assembly_id)
     
     return json.dumps({
@@ -364,13 +401,13 @@ def list_grasp_resource(assembly_id: str) -> str:
 @mcp.tool()
 def read_assembly_resource(assembly_id: str) -> str:
     """
-    Read the complete resource for an assembly (sequence with sequence_id, object_name, and primitives_trials)
+    Read the complete resource for an assembly (sequence with sequence_id, object_name, and tools_trials)
     
     Args:
         assembly_id: The ID of the assembly
     
     Returns:
-        JSON string containing the assembly sequence with sequence_id (fixed), object_name (fixed), and primitives_trials (list of trials with trial_id, grasp_id, gripper_state, primitives ordered sequence, and status)
+        JSON string containing the assembly sequence with sequence_id (fixed), object_name (fixed), and tools_trials (list of trials with trial_id, grasp_id, gripper_state, tools ordered sequence, and status)
     """
     sequence = load_assembly_resource(assembly_id)
     
@@ -393,15 +430,15 @@ def write_assembly_resource(assembly_id: str, sequence: list) -> str:
     
     Args:
         assembly_id: The ID of the assembly
-        sequence: List of objects in the sequence, each with sequence_id (fixed), object_name (fixed), and primitives_trials
-                  Example: [{"sequence_id": 1, "object_name": "line_brown", "primitives_trials": [{"trial_id": 1, "grasp_id": 1, "gripper_state": "open", "primitives": ["primitive_name_1", "primitive_name_2", "primitive_name_3"], "status": "SUCCESS"}]}, ...]
+        sequence: List of objects in the sequence, each with sequence_id (fixed), object_name (fixed), and tools_trials
+                  Example: [{"sequence_id": 1, "object_name": "line_brown", "tools_trials": [{"trial_id": 1, "grasp_id": 1, "gripper_state": "open", "primitives": ["tool_name_1", "tool_name_2", "tool_name_3"], "status": "SUCCESS"}]}, ...]
                   - sequence_id: integer (required, fixed)
                   - object_name: string (required, fixed)
-                  - primitives_trials: list of trial objects (required), each with:
+                  - tools_trials: list of trial objects (required), each with:
                     - trial_id: integer (required)
                     - grasp_id: integer (required, updatable)
                     - gripper_state: "open" or "half-open" (required, updatable)
-                    - primitives: ordered list of strings (required, updatable) - sequence of primitive names executed in order
+                    - primitives: ordered list of strings (required, updatable) - sequence of tool names executed in order
                     - status: "SUCCESS" or "FAILURE" (required)
     
     Returns:
@@ -413,7 +450,7 @@ def write_assembly_resource(assembly_id: str, sequence: list) -> str:
             return json.dumps({"success": False, "error": f"Item at index {i} must be a dictionary"}, indent=2)
         
         # Check for required fields
-        required_fields = {"sequence_id", "object_name", "primitives_trials"}
+        required_fields = {"sequence_id", "object_name", "tools_trials"}
         missing_fields = required_fields - set(item.keys())
         if missing_fields:
             return json.dumps({"success": False, "error": f"Item at index {i} missing required fields: {list(missing_fields)}"}, indent=2)
@@ -424,14 +461,14 @@ def write_assembly_resource(assembly_id: str, sequence: list) -> str:
         except (ValueError, TypeError):
             return json.dumps({"success": False, "error": f"sequence_id must be an integer, got: {item.get('sequence_id')}"}, indent=2)
         
-        # Validate primitives_trials is a list
-        primitives_trials = item.get("primitives_trials")
-        if not isinstance(primitives_trials, list):
-            return json.dumps({"success": False, "error": f"primitives_trials must be a list, got: {type(primitives_trials).__name__}"}, indent=2)
+        # Validate tools_trials is a list
+        tools_trials = item.get("tools_trials")
+        if not isinstance(tools_trials, list):
+            return json.dumps({"success": False, "error": f"tools_trials must be a list, got: {type(tools_trials).__name__}"}, indent=2)
         
         # Validate each trial
         validated_trials = []
-        for j, trial in enumerate(primitives_trials):
+        for j, trial in enumerate(tools_trials):
             if not isinstance(trial, dict):
                 return json.dumps({"success": False, "error": f"Trial at index {j} in item {i} must be a dictionary"}, indent=2)
             
@@ -463,10 +500,10 @@ def write_assembly_resource(assembly_id: str, sequence: list) -> str:
             if not isinstance(primitives, list):
                 return json.dumps({"success": False, "error": f"primitives must be an ordered list (sequence), got: {type(primitives).__name__}"}, indent=2)
             
-            # Validate each primitive in the sequence is a string
+            # Validate each tool in the sequence is a string
             for k, primitive in enumerate(primitives):
                 if not isinstance(primitive, str):
-                    return json.dumps({"success": False, "error": f"Primitive at index {k} in trial {j} of item {i} must be a string, got: {type(primitive).__name__}"}, indent=2)
+                    return json.dumps({"success": False, "error": f"Tool at index {k} in trial {j} of item {i} must be a string, got: {type(primitive).__name__}"}, indent=2)
             
             # Validate status
             status = trial.get("status", "").upper()
@@ -488,16 +525,16 @@ def write_assembly_resource(assembly_id: str, sequence: list) -> str:
             })
         
         # Reject any extra fields - only allow these three fields
-        allowed_fields = {"sequence_id", "object_name", "primitives_trials"}
+        allowed_fields = {"sequence_id", "object_name", "tools_trials"}
         extra_fields = set(item.keys()) - allowed_fields
         if extra_fields:
-            return json.dumps({"success": False, "error": f"Invalid fields found: {list(extra_fields)}. Only 'sequence_id', 'object_name', and 'primitives_trials' are allowed."}, indent=2)
+            return json.dumps({"success": False, "error": f"Invalid fields found: {list(extra_fields)}. Only 'sequence_id', 'object_name', and 'tools_trials' are allowed."}, indent=2)
         
         # Store validated item
         sequence[i] = {
             "sequence_id": sequence_id,
             "object_name": item.get("object_name"),
-            "primitives_trials": validated_trials
+            "tools_trials": validated_trials
         }
     
     save_assembly_resource(assembly_id, sequence)
@@ -515,7 +552,7 @@ def update_assembly_trial(assembly_id: str, object_name: str, trial_id: int, gra
         trial_id: The ID of the trial to update
         grasp_id: Optional new grasp_id to update (if provided)
         gripper_state: Optional new gripper_state to update ("open" or "half-open", if provided)
-        primitives: Optional new primitives ordered sequence to update (if provided)
+        primitives: Optional new tools ordered sequence to update (if provided)
     
     Returns:
         JSON string with confirmation or error message
@@ -527,7 +564,7 @@ def update_assembly_trial(assembly_id: str, object_name: str, trial_id: int, gra
     for item in sequence:
         if item.get("object_name") == object_name:
             object_found = True
-            trials = item.get("primitives_trials", [])
+            trials = item.get("tools_trials", [])
             
             # Find the trial
             trial_found = False
@@ -550,10 +587,10 @@ def update_assembly_trial(assembly_id: str, object_name: str, trial_id: int, gra
                     if primitives is not None:
                         if not isinstance(primitives, list):
                             return json.dumps({"success": False, "error": f"primitives must be an ordered list (sequence), got: {type(primitives).__name__}"}, indent=2)
-                        # Validate each primitive is a string
+                        # Validate each tool is a string
                         for k, primitive in enumerate(primitives):
                             if not isinstance(primitive, str):
-                                return json.dumps({"success": False, "error": f"Primitive at index {k} must be a string, got: {type(primitive).__name__}"}, indent=2)
+                                return json.dumps({"success": False, "error": f"Tool at index {k} must be a string, got: {type(primitive).__name__}"}, indent=2)
                         trial["primitives"] = primitives
                     
                     break
@@ -581,7 +618,7 @@ def add_assembly_trial(assembly_id: str, object_name: str, trial_id: int, grasp_
         trial_id: The ID of the new trial
         grasp_id: The grasp_id for this trial
         gripper_state: "open" or "half-open"
-        primitives: Ordered list of primitive names executed in order
+        primitives: Ordered list of tool names executed in order
         status: "SUCCESS" or "FAILURE"
     
     Returns:
@@ -594,7 +631,7 @@ def add_assembly_trial(assembly_id: str, object_name: str, trial_id: int, grasp_
     for item in sequence:
         if item.get("object_name") == object_name:
             object_found = True
-            trials = item.get("primitives_trials", [])
+            trials = item.get("tools_trials", [])
             
             # Check if trial_id already exists
             for trial in trials:
@@ -615,7 +652,7 @@ def add_assembly_trial(assembly_id: str, object_name: str, trial_id: int, grasp_
             
             for k, primitive in enumerate(primitives):
                 if not isinstance(primitive, str):
-                    return json.dumps({"success": False, "error": f"Primitive at index {k} must be a string, got: {type(primitive).__name__}"}, indent=2)
+                    return json.dumps({"success": False, "error": f"Tool at index {k} must be a string, got: {type(primitive).__name__}"}, indent=2)
             
             status_upper = status.upper()
             if status_upper not in ["SUCCESS", "FAILURE"]:
@@ -698,7 +735,7 @@ def read_final_sequence(assembly_id: str) -> str:
         assembly_id: The ID of the assembly
     
     Returns:
-        JSON string containing the final sequence with sequence_id, object_name, grasp_id, gripper_state, and primitives (ordered sequence)
+        JSON string containing the final sequence with sequence_id, object_name, grasp_id, gripper_state, and tools (ordered sequence)
     """
     sequence = load_final_sequence(assembly_id)
     
@@ -727,7 +764,7 @@ def write_final_sequence(assembly_id: str, sequence: list) -> str:
                   - object_name: string (required)
                   - grasp_id: integer (required)
                   - gripper_state: "open" or "half-open" (required)
-                  - primitives: ordered list of strings (required) - sequence of primitive names executed in order
+                  - primitives: ordered list of strings (required) - sequence of tool names executed in order
     
     Returns:
         JSON string with confirmation or error message
@@ -765,10 +802,10 @@ def write_final_sequence(assembly_id: str, sequence: list) -> str:
         if not isinstance(primitives, list):
             return json.dumps({"success": False, "error": f"primitives must be an ordered list (sequence), got: {type(primitives).__name__}"}, indent=2)
         
-        # Validate each primitive in the sequence is a string
+        # Validate each tool in the sequence is a string
         for j, primitive in enumerate(primitives):
             if not isinstance(primitive, str):
-                return json.dumps({"success": False, "error": f"Primitive at index {j} in item {i} must be a string, got: {type(primitive).__name__}"}, indent=2)
+                return json.dumps({"success": False, "error": f"Tool at index {j} in item {i} must be a string, got: {type(primitive).__name__}"}, indent=2)
         
         # Reject any extra fields - only allow these five fields
         allowed_fields = {"sequence_id", "object_name", "grasp_id", "gripper_state", "primitives"}

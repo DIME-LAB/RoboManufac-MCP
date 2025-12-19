@@ -532,7 +532,7 @@ def move_to_grasp(object_name: str, grasp_id: int, mode: str = "sim", move_to_ob
 #     return _run_primitive("reorient_for_assembly.py", cmd, timeout=90, error_prefix="Reorient for assembly")
 
 @mcp.tool()
-def reorient_for_assembly(object_name: str, base_name: str, mode: str = "sim", current_object_orientation: Optional[List[float]] = None, target_base_orientation: Optional[List[float]] = None) -> Dict[str, Any]:
+def reorient_object(object_name: str, base_name: str, mode: str = "sim", current_object_orientation: Optional[List[float]] = None, target_base_orientation: Optional[List[float]] = None) -> Dict[str, Any]:
     """Reorient object for assembly.
 
     Args:
@@ -686,7 +686,7 @@ def control_gripper(command: str, mode: str = "sim") -> Dict[str, Any]:
 @mcp.tool()
 def move_to_regrasp(mode: str, move_to_clear_space: bool = False, move_down: bool = False, move_to_safe_height: bool = False) -> Dict[str, Any]:
     """Move to regrasp position.
-    This tool is used to aid in reorienting the current object by placing it down on clear space and then moving to safe height so the object can be grasped again.
+    This tool is used to aid in reorienting the current object if the by placing it down on clear space and then moving to safe height so the object can be grasped again.
     
     IMPORTANT: Only ONE flag can be set to True at a time. These flags must be called in sequence one by one to complete the move to regrasp sequence.
     
@@ -719,15 +719,15 @@ def move_to_regrasp(mode: str, move_to_clear_space: bool = False, move_down: boo
     return _run_primitive("move_to_regrasp.py", cmd, timeout=60, error_prefix="Move to regrasp")
 
 @mcp.tool()
-def translate_object(mode: str, base_name: Optional[str] = None, object_name: Optional[str] = None, move_to_base: bool = False, move_down: bool = False, final_base_pos: Optional[List[float]] = None, final_base_orientation: Optional[List[float]] = None, use_default_base: bool = False) -> Dict[str, Any]:
+def translate_object(mode: str, object_name: Optional[str] = None, base_name: Optional[str] = None, move_to_base: bool = False, move_down: bool = False, final_base_pos: Optional[List[float]] = None, final_base_orientation: Optional[List[float]] = None, use_default_base: bool = False) -> Dict[str, Any]:
     """Translate object to target position.
     
     REQUIRED: Exactly one of move_to_base or move_down must be set to True (they are mutually exclusive).
     
     Args:
         mode: Mode to use - "sim" for simulation or "real" for real robot (default: "sim")
-        base_name: Name of the base object (required for translate_for_assembly)
         object_name: Name of the object being held (required in sim mode)
+        base_name: Name of the base object (required in sim mode when using move_to_base or move_down; required in real mode when using move_to_base)
         move_to_base: Moves to the specified base position (exactly one flag must be True)
         move_down: Moves down to the specified target object position (exactly one flag must be True)
         final_base_pos: Final base position [x, y, z] in meters (for translate_for_assembly in real mode)
@@ -741,8 +741,19 @@ def translate_object(mode: str, base_name: Optional[str] = None, object_name: Op
     elif flags_set > 1:
         return {"output": "Error: move_to_base and move_down are mutually exclusive. Set exactly one to True"}
     
-    if mode == "sim" and object_name is None:
-        return {"output": "Error: object_name is required in sim mode"}
+    # Validate sim mode requirements
+    if mode == "sim":
+        if object_name is None:
+            return {"output": "Error: object_name is required in sim mode"}
+        if base_name is None:
+            return {"output": "Error: base_name is required in sim mode when using move_to_base or move_down"}
+    
+    # Validate real mode requirements for move_to_base
+    if mode == "real" and move_to_base:
+        if base_name is None:
+            return {"output": "Error: base_name is required in real mode when using move_to_base"}
+        if not use_default_base and final_base_pos is None:
+            return {"output": "Error: In real mode with move_to_base, either final_base_pos or use_default_base is required"}
     
     cmd = f"--mode {mode}"
     if object_name is not None:
