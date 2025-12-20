@@ -48,6 +48,12 @@ from omni.isaac.core.prims import XFormPrim
 import numpy as np
 from omni.isaac.core import World
 import requests
+import os
+import sys
+
+# Note: The server calculates the path and passes it to the extension.
+# This module-level variable is only used as a fallback if the server doesn't pass a path.
+# The server's path calculation is relative to where the server is launched from.
 
 # Extension Methods required by Omniverse Kit
 # Any class derived from `omni.ext.IExt` in top level module (defined in `python.modules` of `extension.toml`) will be
@@ -285,16 +291,18 @@ class MCPExtension(omni.ext.IExt):
 
         #todo: add a handler for extend simulation method if necessary
         handlers = {
-            "execute_script": self.execute_script,
-            "list_prims": self.list_prims,
-            "get_object_info": self.get_object_info,
-            "move_prim": self.move_prim,
-            "stop_scene": self.stop_scene,
-            "play_scene": self.play_scene,
+            # Commented out - no longer exposed as MCP tools
+            # "execute_script": self.execute_script,
+            # "list_prims": self.list_prims,
+            # "get_object_info": self.get_object_info,
+            # "move_prim": self.move_prim,
+            # Keep stop_scene and play_scene - used internally by reset_scene
+            # "stop_scene": self.stop_scene,
+            # "play_scene": self.play_scene,
             "save_scene_state": self.save_scene_state,
             "restore_scene_state": self.restore_scene_state,
             "read_scene_state": self.read_scene_state,
-            "list_scene_states": self.list_scene_states,
+            # "list_scene_states": self.list_scene_states,  # Commented out - only one file now
             "clear_scene_state": self.clear_scene_state,
         }
         
@@ -787,23 +795,68 @@ class MCPExtension(omni.ext.IExt):
     def _get_prim_path(self, object_name: str) -> str:
         """Get the full prim path for an object name (same pattern as read_write_pose.py)"""
         return f"/World/Objects/{object_name}/{object_name}/{object_name}"
+    
+    def _get_scene_state_path(self) -> str:
+        """Get the path to scene_state.json file in the resources directory.
+        Creates the directory if it doesn't exist (lazy creation).
+        This is a fallback - the server should always pass the path.
+        If used, this will be relative to Isaac Sim's working directory."""
+        # Fallback: use simple relative path (relative to Isaac Sim's working directory)
+        # This should rarely be used since the server always passes the path
+        resources_dir = "resources"
+        resources_dir = os.path.abspath(resources_dir)
+        
+        os.makedirs(resources_dir, exist_ok=True)
+        file_path = os.path.join(resources_dir, "scene_state.json")
+        
+        return file_path
 
-    def save_scene_state(self, object_names: List[str], json_file_path: str = None) -> Dict[str, Any]:
+    def save_scene_state(self, json_file_path: str) -> Dict[str, Any]:
         """Save scene state (object poses) to a JSON file.
         
+        Automatically discovers and saves all objects in /World/Objects.
+        The code automatically finds the prim path from the object name using the pattern /World/Objects/{object_name}/{object_name}/{object_name}.
+        
         Args:
-            object_names: List of object names (e.g., ["fork_orange", "line_red", "base"])
-            json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
+            json_file_path: Path to the JSON file (provided by the server).
             
         Returns:
             Dictionary with execution result.
         """
         try:
-            import os
+            import omni.usd
+            from pxr import Usd
             
-            # Default JSON file path if not provided
-            if json_file_path is None:
-                json_file_path = "object_poses.json"
+            # Automatically discover all objects in /World/Objects
+            stage = omni.usd.get_context().get_stage()
+            if not stage:
+                return {
+                    "status": "error",
+                    "message": "No stage is currently open"
+                }
+            
+            objects_prim = stage.GetPrimAtPath("/World/Objects")
+            if not objects_prim.IsValid():
+                return {
+                    "status": "error",
+                    "message": "/World/Objects path does not exist"
+                }
+            
+            # Get direct children and extract their names
+            children = objects_prim.GetChildren()
+            object_names = [child.GetName() for child in children]
+            
+            if not object_names:
+                return {
+                    "status": "error",
+                    "message": "No objects found in /World/Objects"
+                }
+            
+            print(f"Auto-discovered {len(object_names)} object(s) in /World/Objects: {object_names}")
+            
+            # Ensure directory exists for the provided path
+            resources_dir = os.path.dirname(json_file_path)
+            os.makedirs(resources_dir, exist_ok=True)
             
             # Save current poses to JSON
             poses = {}
@@ -822,13 +875,12 @@ class MCPExtension(omni.ext.IExt):
                     print(f"⚠ Failed to read pose for {object_name} ({prim_path})")
             
             # Write to JSON file
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(json_file_path) if os.path.dirname(json_file_path) else ".", exist_ok=True)
-            
             with open(json_file_path, 'w') as f:
                 json.dump(poses, f, indent=4)
             
-            message = f"Saved {saved_count} object pose(s) to {json_file_path}"
+            # Use absolute path in message
+            abs_path = os.path.abspath(json_file_path)
+            message = f"Saved {saved_count} object pose(s) to {abs_path}"
             if failed_names:
                 message += f". Failed to save {len(failed_names)} object(s): {failed_names}"
             
@@ -850,23 +902,19 @@ class MCPExtension(omni.ext.IExt):
                 "traceback": traceback.format_exc()
             }
 
-    def restore_scene_state(self, object_names: List[str], json_file_path: str = None) -> Dict[str, Any]:
+    def restore_scene_state(self, json_file_path: str) -> Dict[str, Any]:
         """Restore scene state (object poses) from a JSON file.
         
+        Automatically restores all objects that were saved in the scene state file.
+        The code automatically finds the prim path from the object name using the pattern /World/Objects/{object_name}/{object_name}/{object_name}.
+        
         Args:
-            object_names: List of object names to restore (e.g., ["fork_orange", "line_red", "base"])
-            json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
+            json_file_path: Path to the JSON file (provided by the server).
             
         Returns:
             Dictionary with execution result.
         """
         try:
-            import os
-            
-            # Default JSON file path if not provided
-            if json_file_path is None:
-                json_file_path = "object_poses.json"
-            
             # Restore poses from JSON
             if not os.path.exists(json_file_path):
                 return {
@@ -883,22 +931,24 @@ class MCPExtension(omni.ext.IExt):
                     "message": f"Invalid JSON file: {str(e)}"
                 }
             
+            if not poses:
+                return {
+                    "status": "error",
+                    "message": "No objects found in scene state file"
+                }
+            
+            # Restore all objects from the saved poses
             restored_count = 0
             failed_names = []
             
-            for object_name in object_names:
+            for object_name, pose_data in poses.items():
                 prim_path = self._get_prim_path(object_name)
-                if object_name in poses:
-                    pose_data = poses[object_name]
-                    if self._write_prim_pose(prim_path, pose_data):
-                        restored_count += 1
-                        print(f"✓ Restored pose for {object_name} ({prim_path})")
-                    else:
-                        failed_names.append(object_name)
-                        print(f"⚠ Failed to restore pose for {object_name} ({prim_path})")
+                if self._write_prim_pose(prim_path, pose_data):
+                    restored_count += 1
+                    print(f"✓ Restored pose for {object_name} ({prim_path})")
                 else:
                     failed_names.append(object_name)
-                    print(f"⚠ No saved pose found for {object_name} in JSON file")
+                    print(f"⚠ Failed to restore pose for {object_name} ({prim_path})")
             
             message = f"Restored {restored_count} object pose(s) from {json_file_path}"
             if failed_names:
@@ -922,22 +972,16 @@ class MCPExtension(omni.ext.IExt):
                 "traceback": traceback.format_exc()
             }
 
-    def read_scene_state(self, json_file_path: str = None) -> Dict[str, Any]:
+    def read_scene_state(self, json_file_path: str) -> Dict[str, Any]:
         """Read scene state (object poses) from a JSON file without applying them.
         
         Args:
-            json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
+            json_file_path: Path to the JSON file (provided by the server).
             
         Returns:
             Dictionary with the saved poses data.
         """
         try:
-            import os
-            
-            # Default JSON file path if not provided
-            if json_file_path is None:
-                json_file_path = "object_poses.json"
-            
             # Check if file exists
             if not os.path.exists(json_file_path):
                 return {
@@ -1076,93 +1120,31 @@ class MCPExtension(omni.ext.IExt):
                 "traceback": traceback.format_exc()
             }
 
-    def clear_scene_state(self, object_names: List[str] = None, json_file_path: str = None, clear_all: bool = False) -> Dict[str, Any]:
-        """Clear/delete object poses from a JSON file.
+    def clear_scene_state(self, json_file_path: str) -> Dict[str, Any]:
+        """Clear/delete the scene state JSON file.
+        
+        Deletes the entire scene state file, removing all saved object poses.
         
         Args:
-            object_names: Optional list of object names to remove. If None or empty and clear_all=False, clears all.
-            json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
-            clear_all: If True, deletes the entire file. If False, removes specified objects.
+            json_file_path: Path to the JSON file (provided by the server).
             
         Returns:
             Dictionary with execution result.
         """
         try:
-            import os
-            
-            # Default JSON file path if not provided
-            if json_file_path is None:
-                json_file_path = "object_poses.json"
-            
-            # If clear_all is True, delete the entire file
-            if clear_all:
-                if os.path.exists(json_file_path):
-                    os.remove(json_file_path)
-                    return {
-                        "status": "success",
-                        "message": f"Deleted JSON file: {json_file_path}",
-                        "json_file_path": json_file_path
-                    }
-                else:
-                    return {
-                        "status": "error",
-                        "message": f"JSON file not found: {json_file_path}"
-                    }
-            
-            # Check if file exists
-            if not os.path.exists(json_file_path):
-                return {
-                    "status": "error",
-                    "message": f"JSON file not found: {json_file_path}"
-                }
-            
-            # Read the JSON file
-            try:
-                with open(json_file_path, 'r') as f:
-                    poses = json.load(f)
-            except json.JSONDecodeError as e:
-                return {
-                    "status": "error",
-                    "message": f"Invalid JSON file: {str(e)}"
-                }
-            
-            # If no object_names provided, clear all
-            if not object_names:
-                object_names = list(poses.keys())
-            
-            # Remove specified objects
-            removed_count = 0
-            not_found = []
-            
-            for object_name in object_names:
-                if object_name in poses:
-                    del poses[object_name]
-                    removed_count += 1
-                    print(f"✓ Removed {object_name} from JSON file")
-                else:
-                    not_found.append(object_name)
-                    print(f"⚠ {object_name} not found in JSON file")
-            
-            # Write back the updated poses (or delete file if empty)
-            if len(poses) == 0:
+            # Delete the entire file
+            if os.path.exists(json_file_path):
                 os.remove(json_file_path)
-                message = f"Removed {removed_count} object(s) and deleted empty JSON file"
+                return {
+                    "status": "success",
+                    "message": f"Deleted scene state file: {json_file_path}",
+                    "json_file_path": json_file_path
+                }
             else:
-                with open(json_file_path, 'w') as f:
-                    json.dump(poses, f, indent=4)
-                message = f"Removed {removed_count} object(s) from {json_file_path}. {len(poses)} object(s) remaining."
-            
-            if not_found:
-                message += f" {len(not_found)} object(s) not found: {not_found}"
-            
-            return {
-                "status": "success",
-                "message": message,
-                "removed_count": removed_count,
-                "not_found": not_found,
-                "remaining_count": len(poses),
-                "json_file_path": json_file_path
-            }
+                return {
+                    "status": "error",
+                    "message": f"Scene state file not found: {json_file_path}"
+                }
                 
         except Exception as e:
             carb.log_error(f"Error in clear_scene_state: {e}")

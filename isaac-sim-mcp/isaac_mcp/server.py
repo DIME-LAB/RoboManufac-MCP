@@ -37,6 +37,18 @@ from pathlib import Path
 import base64
 from urllib.parse import urlparse
 
+# Output directories - use MCP_CLIENT_OUTPUT_DIR if set, otherwise use relative paths
+# Directories are created lazily when needed by tools
+BASE_OUTPUT_DIR = os.getenv("MCP_CLIENT_OUTPUT_DIR", "").strip()
+
+if BASE_OUTPUT_DIR:
+    # If BASE_OUTPUT_DIR is set, ensure it's absolute and use it
+    BASE_OUTPUT_DIR = os.path.abspath(BASE_OUTPUT_DIR)
+    RESOURCES_DIR = os.path.join(BASE_OUTPUT_DIR, "resources")
+else:
+    # If not set, use relative path (will be relative to where the server is run from)
+    RESOURCES_DIR = "resources"
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -219,7 +231,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
 # Create the MCP server with lifespan support
 mcp = FastMCP(
     "IsaacSimMCP",
-    #description="Isaac Sim integration through the Model Context Protocol",
+    description="Isaac Sim integration through the Model Context Protocol",
     lifespan=server_lifespan
 )
 
@@ -259,169 +271,189 @@ def get_isaac_connection():
     return _isaac_connection
 
 
-@mcp.tool()
-def execute_script(ctx: Context, code: str) -> str:
-    """
-    SIMULATION CONTROL FUNCTIONS:
+# @mcp.tool()
+# def execute_script(ctx: Context, code: str) -> str:
+#     """
+#     SIMULATION CONTROL FUNCTIONS:
+#     
+#     To stop the simulation:
+#     import omni.timeline
+#     def stop_simulation():
+#         timeline = omni.timeline.get_timeline_interface()
+#         if timeline.is_playing() or timeline.is_paused():
+#             timeline.stop()
+#             print("✓ Simulation stopped")
+#         else:
+#             print("⚠ Simulation is already stopped")
+#     stop_simulation()
+#
+#     To play/start the simulation:
+#     import omni.timeline
+#     def play_simulation():
+#         timeline = omni.timeline.get_timeline_interface()
+#         if timeline.is_stopped():
+#             timeline.play()
+#             print("✓ Simulation started")
+#         elif timeline.is_playing():
+#             print("⚠ Simulation is already playing")
+#         else:
+#             print("⚠ Simulation is paused, resuming...")
+#             timeline.play()
+#     play_simulation()
+#
+#     Parameters:
+#     - code: The Python code to execute, e.g. "omni.kit.commands.execute("CreatePrim", prim_type="Sphere"), play or stop simulation to reset the scene"
+#     """
+#     try:
+#         # Get the global connection
+#         isaac = get_isaac_connection()
+#         print("code: ", code)
+#         
+#         result = isaac.send_command("execute_script", {"code": code})
+#         print("result: ", result)
+#         return result
+#         # return f"Code executed successfully: {result.get('result', '')}"
+#     except Exception as e:
+#         logger.error(f"Error executing code: {str(e)}")
+#         # return f"Error executing code: {str(e)}"
+#         return {"status": "error", "error": str(e), "message": "Error executing code"}
+
     
-    To stop the simulation:
-    import omni.timeline
-    def stop_simulation():
-        timeline = omni.timeline.get_timeline_interface()
-        if timeline.is_playing() or timeline.is_paused():
-            timeline.stop()
-            print("✓ Simulation stopped")
-        else:
-            print("⚠ Simulation is already stopped")
-    stop_simulation()
+# @mcp.tool()
+# def list_prims(path: str = "/World/Objects") -> str:
+#     """
+#     List only the direct children of the specified path (default: /World/Objects).
+#     Useful for discovering available objects before moving, reading poses, or other operations.
+#     
+#     Args:
+#         path: The prim path to list children from (default: "/World/Objects")
+#     
+#     Example:
+#         list_prims()
+#         list_prims("/World/Objects")
+#         list_prims("/World")
+#     """
+#     try:
+#         isaac = get_isaac_connection()
+#         result = isaac.send_command("list_prims", {"path": path})
+#         
+#         if result.get("status") == "success":
+#             prims = result.get("prims", [])
+#             
+#             response = f"Direct children of {path} ({len(prims)}):\n\n"
+#             
+#             for prim in prims:
+#                 prim_path = prim['path']
+#                 name = prim['name']
+#                 prim_type = prim['type']
+#                 
+#                 # Format: path (type) or path [name] (type) if name differs
+#                 if name and name != prim_path.split('/')[-1]:
+#                     response += f"{prim_path} [{name}] ({prim_type})\n"
+#                 else:
+#                     response += f"{prim_path} ({prim_type})\n"
+#             
+#             return response
+#         else:
+#             return f"Error listing prims: {result.get('message', 'Unknown error')}"
+#             
+#     except Exception as e:
+#         logger.error(f"Error listing prims: {str(e)}")
+#         return f"Error listing prims: {str(e)}"
 
-    To play/start the simulation:
-    import omni.timeline
-    def play_simulation():
-        timeline = omni.timeline.get_timeline_interface()
-        if timeline.is_stopped():
-            timeline.play()
-            print("✓ Simulation started")
-        elif timeline.is_playing():
-            print("⚠ Simulation is already playing")
-        else:
-            print("⚠ Simulation is paused, resuming...")
-            timeline.play()
-    play_simulation()
 
-    Parameters:
-    - code: The Python code to execute, e.g. "omni.kit.commands.execute("CreatePrim", prim_type="Sphere"), play or stop simulation to reset the scene"
-    """
-    try:
-        # Get the global connection
-        isaac = get_isaac_connection()
-        print("code: ", code)
+# @mcp.tool()
+# def stop_scene() -> str:
+#     """
+#     Stop the simulation timeline.
+#     Works exactly like the execute_script stop_simulation example.
+    
+#     Example:
+#         stop_scene()
+#     """
+#     try:
+#         isaac = get_isaac_connection()
+#         result = isaac.send_command("stop_scene")
         
-        result = isaac.send_command("execute_script", {"code": code})
-        print("result: ", result)
-        return result
-        # return f"Code executed successfully: {result.get('result', '')}"
-    except Exception as e:
-        logger.error(f"Error executing code: {str(e)}")
-        # return f"Error executing code: {str(e)}"
-        return {"status": "error", "error": str(e), "message": "Error executing code"}
+#         if result.get("status") == "success":
+#             return result.get("message", "Simulation stopped")
+#         else:
+#             return f"Error stopping scene: {result.get('message', 'Unknown error')}"
+            
+#     except Exception as e:
+#         logger.error(f"Error stopping scene: {str(e)}")
+#         return f"Error stopping scene: {str(e)}"
 
+
+# @mcp.tool()
+# def play_scene() -> str:
+#     """
+#     Start/resume the simulation timeline.
+#     Works exactly like the execute_script play_simulation example.
     
-@mcp.tool()
-def list_prims(path: str = "/World/Objects") -> str:
-    """
-    List only the direct children of the specified path (default: /World/Objects).
-    Useful for discovering available objects before moving, reading poses, or other operations.
-    
-    Args:
-        path: The prim path to list children from (default: "/World/Objects")
-    
-    Example:
-        list_prims()
-        list_prims("/World/Objects")
-        list_prims("/World")
-    """
-    try:
-        isaac = get_isaac_connection()
-        result = isaac.send_command("list_prims", {"path": path})
+#     Example:
+#         play_scene()
+#     """
+#     try:
+#         isaac = get_isaac_connection()
+#         result = isaac.send_command("play_scene")
         
-        if result.get("status") == "success":
-            prims = result.get("prims", [])
+#         if result.get("status") == "success":
+#             return result.get("message", "Simulation started")
+#         else:
+#             return f"Error playing scene: {result.get('message', 'Unknown error')}"
             
-            response = f"Direct children of {path} ({len(prims)}):\n\n"
-            
-            for prim in prims:
-                prim_path = prim['path']
-                name = prim['name']
-                prim_type = prim['type']
-                
-                # Format: path (type) or path [name] (type) if name differs
-                if name and name != prim_path.split('/')[-1]:
-                    response += f"{prim_path} [{name}] ({prim_type})\n"
-                else:
-                    response += f"{prim_path} ({prim_type})\n"
-            
-            return response
-        else:
-            return f"Error listing prims: {result.get('message', 'Unknown error')}"
-            
-    except Exception as e:
-        logger.error(f"Error listing prims: {str(e)}")
-        return f"Error listing prims: {str(e)}"
+#     except Exception as e:
+#         logger.error(f"Error playing scene: {str(e)}")
+#         return f"Error playing scene: {str(e)}"
+
+
+# @mcp.tool()
+# def reset_scene() -> str:
+#     """
+#     Reset the simulation by stopping and then starting it again.
+#     This tool first stops the simulation timeline, then starts it.
+#     
+#     Example:
+#         reset_scene()
+#     """
+#     try:
+#         # First, stop the scene
+#         stop_message = stop_scene()
+#         if stop_message.startswith("Error"):
+#             return stop_message
+#         
+#         # Then, start the scene
+#         play_message = play_scene()
+#         if play_message.startswith("Error"):
+#             return play_message
+#         
+#         return f"{stop_message}\n{play_message}"
+#             
+#     except Exception as e:
+#         logger.error(f"Error resetting scene: {str(e)}")
+#         return f"Error resetting scene: {str(e)}"
 
 
 @mcp.tool()
-def stop_scene() -> str:
-    """
-    Stop the simulation timeline.
-    Works exactly like the execute_script stop_simulation example.
-    
-    Example:
-        stop_scene()
-    """
-    try:
-        isaac = get_isaac_connection()
-        result = isaac.send_command("stop_scene")
-        
-        if result.get("status") == "success":
-            return result.get("message", "Simulation stopped")
-        else:
-            return f"Error stopping scene: {result.get('message', 'Unknown error')}"
-            
-    except Exception as e:
-        logger.error(f"Error stopping scene: {str(e)}")
-        return f"Error stopping scene: {str(e)}"
-
-
-@mcp.tool()
-def play_scene() -> str:
-    """
-    Start/resume the simulation timeline.
-    Works exactly like the execute_script play_simulation example.
-    
-    Example:
-        play_scene()
-    """
-    try:
-        isaac = get_isaac_connection()
-        result = isaac.send_command("play_scene")
-        
-        if result.get("status") == "success":
-            return result.get("message", "Simulation started")
-        else:
-            return f"Error playing scene: {result.get('message', 'Unknown error')}"
-            
-    except Exception as e:
-        logger.error(f"Error playing scene: {str(e)}")
-        return f"Error playing scene: {str(e)}"
-
-
-@mcp.tool()
-def save_scene_state(object_names: list, json_file_path: str = None) -> str:
+def save_scene_state() -> str:
     """
     Save scene state (object poses) to a JSON file.
     
-    This tool allows you to save the current poses of objects to a JSON file when a state is verified.
+    This tool automatically discovers and saves all objects in /World/Objects to a JSON file when a state is verified.
     Use this when objects are in a verified/assembled state that you want to restore later.
     The code automatically finds the prim path from the object name using the pattern /World/Objects/{object_name}/{object_name}/{object_name}.
     
-    Workflow:
-    1. When objects are in a verified/assembled state, use save_scene_state() to save their poses
-    2. If something goes wrong, use reset_scene() to reset the simulation
-    3. Then use restore_scene_state() to restore the objects to their previously saved poses
-    
-    Args:
-        object_names: List of object names to save (e.g., ["object1", "object2", "object3"])
-        json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
-    
     Example:
-        save_scene_state(["object1", "object2", "object3"])
-        save_scene_state(["object1", "object2"], "verified_state.json")
+        save_scene_state()
     """
     try:
+        # Calculate the file path on the server side (where we have access to MCP_CLIENT_OUTPUT_DIR)
+        resources_dir = os.path.abspath(RESOURCES_DIR)
+        json_file_path = os.path.join(resources_dir, "scene_state.json")
+        
         isaac = get_isaac_connection()
         result = isaac.send_command("save_scene_state", {
-            "object_names": object_names,
             "json_file_path": json_file_path
         })
         
@@ -446,31 +478,24 @@ def save_scene_state(object_names: list, json_file_path: str = None) -> str:
 
 
 @mcp.tool()
-def restore_scene_state(object_names: list, json_file_path: str = None) -> str:
+def restore_scene_state() -> str:
     """
     Restore scene state (object poses) from a JSON file.
     
-    This tool restores object poses from a previously saved JSON file. Use this after reset_scene()
+    This tool automatically restores all objects from a previously saved JSON file. Move home before using this tool
     to restore objects to their previously verified/assembled state.
     The code automatically finds the prim path from the object name using the pattern /World/Objects/{object_name}/{object_name}/{object_name}.
     
-    Workflow:
-    1. When objects are in a verified/assembled state, use save_scene_state() to save their poses
-    2. If something goes wrong, use reset_scene() to reset the simulation
-    3. Then use restore_scene_state() to restore the objects to their previously saved poses
-    
-    Args:
-        object_names: List of object names to restore (e.g., ["object1", "object2", "object3"])
-        json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
-    
     Example:
-        restore_scene_state(["object1", "object2", "object3"])
-        restore_scene_state(["object1", "object2"], "verified_state.json")
+        restore_scene_state()
     """
     try:
+        # Calculate the file path on the server side (where we have access to MCP_CLIENT_OUTPUT_DIR)
+        resources_dir = os.path.abspath(RESOURCES_DIR)
+        json_file_path = os.path.join(resources_dir, "scene_state.json")
+        
         isaac = get_isaac_connection()
         result = isaac.send_command("restore_scene_state", {
-            "object_names": object_names,
             "json_file_path": json_file_path
         })
         
@@ -495,21 +520,22 @@ def restore_scene_state(object_names: list, json_file_path: str = None) -> str:
 
 
 @mcp.tool()
-def read_scene_state(json_file_path: str) -> str:
+def read_scene_state() -> str:
     """
-    Read scene state (object poses) from a JSON file without applying them.
+    Read scene state (object poses) from the JSON file without applying them.
     
-    This tool allows you to view the saved poses in a JSON file without restoring them to the scene.
+    This tool allows you to view the saved poses in the scene state file without restoring them to the scene.
     Useful for checking what poses were saved before restoring.
-    
-    Args:
-        json_file_path: Path to the JSON file (required)
+    Reads from the fixed file: scene_state.json
     
     Example:
-        read_scene_state("verified_state.json")
-        read_scene_state("object_poses.json")
+        read_scene_state()
     """
     try:
+        # Calculate the file path on the server side (where we have access to MCP_CLIENT_OUTPUT_DIR)
+        resources_dir = os.path.abspath(RESOURCES_DIR)
+        json_file_path = os.path.join(resources_dir, "scene_state.json")
+        
         isaac = get_isaac_connection()
         result = isaac.send_command("read_scene_state", {
             "json_file_path": json_file_path
@@ -517,11 +543,13 @@ def read_scene_state(json_file_path: str) -> str:
         
         if result.get("status") == "success":
             message = result.get("message", "Scene state read successfully")
+            json_file_path = result.get("json_file_path", "scene_state.json")
             object_count = result.get("object_count", 0)
             object_names = result.get("object_names", [])
             summary = result.get("summary", [])
             
             response = f"{message}\n"
+            response += f"File: {json_file_path}\n"
             response += f"Objects saved: {object_count}\n"
             response += f"Object names: {', '.join(object_names)}\n\n"
             
@@ -545,116 +573,90 @@ def read_scene_state(json_file_path: str) -> str:
         return f"Error: {str(e)}"
 
 
+# @mcp.tool()
+# def list_scene_states(directory: str = None) -> str:
+#     """
+#     List all available scene state JSON files in a directory.
+#     
+#     This tool helps you discover available scene state files that were previously saved.
+#     Use this to find the exact filename before using read_scene_state() or restore_scene_state().
+#     
+#     By default, scans the current working directory (same location where save_scene_state saves files
+#     when using a simple filename like "scene_state.json"). If you saved files to a specific directory,
+#     provide that same directory path here.
+#     
+#     Args:
+#         directory: Optional directory path to search for scene state files. 
+#                    If None, scans the current working directory (same as save_scene_state default location)
+#     
+#     Example:
+#         # List files in current directory (where save_scene_state saves by default)
+#         list_scene_states()
+#         
+#         # List files in a specific directory
+#         list_scene_states("./states")
+#         list_scene_states("states")
+#     """
+#     try:
+#         isaac = get_isaac_connection()
+#         result = isaac.send_command("list_scene_states", {
+#             "directory": directory
+#         })
+#         
+#         if result.get("status") == "success":
+#             files = result.get("files", [])
+#             file_count = result.get("file_count", 0)
+#             
+#             response = f"Available scene state files ({file_count}):\n\n"
+#             
+#             if files:
+#                 for file_info in files:
+#                     filename = file_info.get("filename", "unknown")
+#                     file_path = file_info.get("path", filename)
+#                     object_count = file_info.get("object_count", 0)
+#                     object_names = file_info.get("object_names", [])
+#                     
+#                     response += f"{filename}\n"
+#                     response += f"  Path: {file_path}\n"
+#                     response += f"  Objects: {object_count}"
+#                     if object_names:
+#                         response += f" ({', '.join(object_names)})"
+#                     response += "\n\n"
+#             else:
+#                 response += "No scene state files found.\n"
+#             
+#             return response
+#         else:
+#             return f"Error: {result.get('message', 'Unknown error')}"
+#             
+#     except Exception as e:
+#         logger.error(f"Error in list_scene_states: {str(e)}")
+#         return f"Error: {str(e)}"
+
+
 @mcp.tool()
-def list_scene_states(directory: str = None) -> str:
+def clear_scene_state() -> str:
     """
-    List all available scene state JSON files in a directory.
+    Clear/delete the scene state JSON file.
     
-    This tool helps you discover available scene state files that were previously saved.
-    Use this to find the exact filename before using read_scene_state() or restore_scene_state().
-    
-    By default, scans the current working directory (same location where save_scene_state saves files
-    when using a simple filename like "object_poses.json"). If you saved files to a specific directory,
-    provide that same directory path here.
-    
-    Args:
-        directory: Optional directory path to search for scene state files. 
-                   If None, scans the current working directory (same as save_scene_state default location)
+    This tool deletes the entire scene state file, removing all saved object poses.
     
     Example:
-        # List files in current directory (where save_scene_state saves by default)
-        list_scene_states()
-        
-        # List files in a specific directory
-        list_scene_states("./states")
-        list_scene_states("states")
-    """
-    try:
-        isaac = get_isaac_connection()
-        result = isaac.send_command("list_scene_states", {
-            "directory": directory
-        })
-        
-        if result.get("status") == "success":
-            files = result.get("files", [])
-            file_count = result.get("file_count", 0)
-            
-            response = f"Available scene state files ({file_count}):\n\n"
-            
-            if files:
-                for file_info in files:
-                    filename = file_info.get("filename", "unknown")
-                    file_path = file_info.get("path", filename)
-                    object_count = file_info.get("object_count", 0)
-                    object_names = file_info.get("object_names", [])
-                    
-                    response += f"{filename}\n"
-                    response += f"  Path: {file_path}\n"
-                    response += f"  Objects: {object_count}"
-                    if object_names:
-                        response += f" ({', '.join(object_names)})"
-                    response += "\n\n"
-            else:
-                response += "No scene state files found.\n"
-            
-            return response
-        else:
-            return f"Error: {result.get('message', 'Unknown error')}"
-            
-    except Exception as e:
-        logger.error(f"Error in list_scene_states: {str(e)}")
-        return f"Error: {str(e)}"
-
-
-@mcp.tool()
-def clear_scene_state(object_names: list = None, json_file_path: str = None, clear_all: bool = False) -> str:
-    """
-    Clear/delete object poses from a JSON file.
-    
-    This tool allows you to remove specific objects from the saved JSON file, or delete the entire file.
-    
-    Args:
-        object_names: Optional list of object names to remove (e.g., ["object1", "object2"]). 
-                      If None or empty and clear_all=False, removes all objects.
-        json_file_path: Optional path to the JSON file (defaults to "object_poses.json")
-        clear_all: If True, deletes the entire JSON file. If False, removes specified objects.
-    
-    Examples:
-        # Remove specific objects
-        clear_scene_state(["object1", "object2"])
-        
-        # Remove all objects (clears the file)
         clear_scene_state()
-        
-        # Delete the entire file
-        clear_scene_state(clear_all=True)
-        
-        # Clear specific file
-        clear_scene_state(["object1"], "verified_state.json")
     """
     try:
+        # Calculate the file path on the server side (where we have access to MCP_CLIENT_OUTPUT_DIR)
+        resources_dir = os.path.abspath(RESOURCES_DIR)
+        json_file_path = os.path.join(resources_dir, "scene_state.json")
+        
         isaac = get_isaac_connection()
         result = isaac.send_command("clear_scene_state", {
-            "object_names": object_names,
-            "json_file_path": json_file_path,
-            "clear_all": clear_all
+            "json_file_path": json_file_path
         })
         
         if result.get("status") == "success":
             message = result.get("message", "Scene state cleared successfully")
-            removed_count = result.get("removed_count")
-            remaining_count = result.get("remaining_count")
-            not_found = result.get("not_found", [])
-            
-            response = message
-            if removed_count is not None:
-                response += f"\nRemoved: {removed_count} object(s)"
-            if remaining_count is not None:
-                response += f"\nRemaining: {remaining_count} object(s)"
-            if not_found:
-                response += f"\nNot found: {not_found}"
-            
-            return response
+            return message
         else:
             return f"Error: {result.get('message', 'Unknown error')}"
             
@@ -663,118 +665,118 @@ def clear_scene_state(object_names: list = None, json_file_path: str = None, cle
         return f"Error: {str(e)}"
 
 
-@mcp.tool()
-def get_object_info(prim_path: str) -> str:
-    """
-    Get comprehensive information about an object including its pose in all formats.
-    
-    Args:
-        prim_path: Path to the prim/object (use list_prims() to find available paths)
-    
-    Example:
-        get_object_info("/World/UR5e")
-    """
-    try:
-        isaac = get_isaac_connection()
-        result = isaac.send_command("get_object_info", {"prim_path": prim_path})
-        
-        if result.get("status") == "success":
-            prim_info = result.get("prim_info", {})
-            position = result.get("position", [])
-            quat = result.get("rotation_quaternion", [])
-            rad = result.get("rotation_radians", [])
-            deg = result.get("rotation_degrees", [])
-            scale = result.get("scale", [])
-            
-            response = f"Object Info for {prim_path}:\n\n"
-            
-            # Basic info
-            response += f"Basic Properties:\n"
-            response += f"  Name: {prim_info.get('name', 'N/A')}\n"
-            response += f"  Type: {prim_info.get('type', 'N/A')}\n"
-            response += f"  Active: {prim_info.get('is_active', False)}\n"
-            response += f"  Has Children: {prim_info.get('has_children', False)}\n\n"
-            
-            # Transform info
-            response += f"Transform:\n"
-            response += f"  Position: [{position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f}]\n\n"
-            response += f"  Rotation:\n"
-            response += f"    Degrees (r,p,y): [{deg[0]:.3f}, {deg[1]:.3f}, {deg[2]:.3f}]\n"
-            response += f"    Radians (r,p,y): [{rad[0]:.3f}, {rad[1]:.3f}, {rad[2]:.3f}]\n"
-            response += f"    Quaternion (w,x,y,z): [{quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f}]\n\n"
-            response += f"  Scale: [{scale[0]:.3f}, {scale[1]:.3f}, {scale[2]:.3f}]"
-            
-            return response
-        else:
-            return f"Error getting object info: {result.get('message', 'Unknown error')}"
-            
-    except Exception as e:
-        logger.error(f"Error getting object info: {str(e)}")
-        return f"Error getting object info: {str(e)}"
+# @mcp.tool()
+# def get_object_info(prim_path: str) -> str:
+#     """
+#     Get comprehensive information about an object including its pose in all formats.
+#     
+#     Args:
+#         prim_path: Path to the prim/object (use list_prims() to find available paths)
+#     
+#     Example:
+#         get_object_info("/World/UR5e")
+#     """
+#     try:
+#         isaac = get_isaac_connection()
+#         result = isaac.send_command("get_object_info", {"prim_path": prim_path})
+#         
+#         if result.get("status") == "success":
+#             prim_info = result.get("prim_info", {})
+#             position = result.get("position", [])
+#             quat = result.get("rotation_quaternion", [])
+#             rad = result.get("rotation_radians", [])
+#             deg = result.get("rotation_degrees", [])
+#             scale = result.get("scale", [])
+#             
+#             response = f"Object Info for {prim_path}:\n\n"
+#             
+#             # Basic info
+#             response += f"Basic Properties:\n"
+#             response += f"  Name: {prim_info.get('name', 'N/A')}\n"
+#             response += f"  Type: {prim_info.get('type', 'N/A')}\n"
+#             response += f"  Active: {prim_info.get('is_active', False)}\n"
+#             response += f"  Has Children: {prim_info.get('has_children', False)}\n\n"
+#             
+#             # Transform info
+#             response += f"Transform:\n"
+#             response += f"  Position: [{position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f}]\n\n"
+#             response += f"  Rotation:\n"
+#             response += f"    Degrees (r,p,y): [{deg[0]:.3f}, {deg[1]:.3f}, {deg[2]:.3f}]\n"
+#             response += f"    Radians (r,p,y): [{rad[0]:.3f}, {rad[1]:.3f}, {rad[2]:.3f}]\n"
+#             response += f"    Quaternion (w,x,y,z): [{quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f}]\n\n"
+#             response += f"  Scale: [{scale[0]:.3f}, {scale[1]:.3f}, {scale[2]:.3f}]"
+#             
+#             return response
+#         else:
+#             return f"Error getting object info: {result.get('message', 'Unknown error')}"
+#             
+#     except Exception as e:
+#         logger.error(f"Error getting object info: {str(e)}")
+#         return f"Error getting object info: {str(e)}"
 
 
-@mcp.tool()
-def move_prim(prim_path: str, position: list = None, orientation: list = None, 
-              orientation_format: str = "degrees") -> str:
-    """
-    Move a prim to a new pose with flexible orientation input.
-    Reads current pose and allows selective updates to position and orientation.
-    
-    Args:
-        prim_path: Path to the prim/object (use list_prims() to find available paths)
-        position: [x, y, z] new position (optional, keeps current if not specified)
-        orientation: New orientation values (optional, keeps current if not specified)
-        orientation_format: "degrees", "radians", or "quaternion" (default: degrees)
-    
-    Examples:
-        # Move to new position only
-        move_prim("/World/trial", position=[1.0, 2.0, 0.5])
-        
-        # Move with rotation in degrees
-        move_prim("/World/trial", position=[1.0, 2.0, 0.5], orientation=[0, 0, 45])
-        
-        # Move with rotation in radians
-        move_prim("/World/trial", position=[1.0, 2.0, 0.5], orientation=[0, 0, 0.785], orientation_format="radians")
-        
-        # Move with quaternion
-        move_prim("/World/trial", position=[1.0, 2.0, 0.5], orientation=[0.924, 0, 0, 0.383], orientation_format="quaternion")
-        
-        # Just rotate, keep current position
-        move_prim("/World/trial", orientation=[90, 0, 0])
-    """
-    try:
-        isaac = get_isaac_connection()
-        result = isaac.send_command("move_prim", {
-            "prim_path": prim_path,
-            "position": position,
-            "orientation": orientation,
-            "orientation_format": orientation_format
-        })
-        
-        if result.get("status") == "success":
-            prev_pos = result.get("previous_position", [])
-            prev_quat = result.get("previous_quaternion", [])
-            new_pos = result.get("new_position", [])
-            new_quat = result.get("new_quaternion", [])
-            
-            response = f"Successfully moved {prim_path}:\n\n"
-            
-            response += f"Previous Pose:\n"
-            response += f"  Position: [{prev_pos[0]:.3f}, {prev_pos[1]:.3f}, {prev_pos[2]:.3f}]\n"
-            response += f"  Quaternion: [{prev_quat[0]:.3f}, {prev_quat[1]:.3f}, {prev_quat[2]:.3f}, {prev_quat[3]:.3f}]\n\n"
-            
-            response += f"New Pose:\n"
-            response += f"  Position: [{new_pos[0]:.3f}, {new_pos[1]:.3f}, {new_pos[2]:.3f}]\n"
-            response += f"  Quaternion: [{new_quat[0]:.3f}, {new_quat[1]:.3f}, {new_quat[2]:.3f}, {new_quat[3]:.3f}]\n"
-            response += f"  Orientation Format: {result.get('orientation_format', 'degrees')}"
-            
-            return response
-        else:
-            return f"Error moving prim: {result.get('message', 'Unknown error')}"
-            
-    except Exception as e:
-        logger.error(f"Error moving prim: {str(e)}")
-        return f"Error moving prim: {str(e)}"
+# @mcp.tool()
+# def move_prim(prim_path: str, position: list = None, orientation: list = None, 
+#               orientation_format: str = "degrees") -> str:
+#     """
+#     Move a prim to a new pose with flexible orientation input.
+#     Reads current pose and allows selective updates to position and orientation.
+#     
+#     Args:
+#         prim_path: Path to the prim/object (use list_prims() to find available paths)
+#         position: [x, y, z] new position (optional, keeps current if not specified)
+#         orientation: New orientation values (optional, keeps current if not specified)
+#         orientation_format: "degrees", "radians", or "quaternion" (default: degrees)
+#     
+#     Examples:
+#         # Move to new position only
+#         move_prim("/World/trial", position=[1.0, 2.0, 0.5])
+#         
+#         # Move with rotation in degrees
+#         move_prim("/World/trial", position=[1.0, 2.0, 0.5], orientation=[0, 0, 45])
+#         
+#         # Move with rotation in radians
+#         move_prim("/World/trial", position=[1.0, 2.0, 0.5], orientation=[0, 0, 0.785], orientation_format="radians")
+#         
+#         # Move with quaternion
+#         move_prim("/World/trial", position=[1.0, 2.0, 0.5], orientation=[0.924, 0, 0, 0.383], orientation_format="quaternion")
+#         
+#         # Just rotate, keep current position
+#         move_prim("/World/trial", orientation=[90, 0, 0])
+#     """
+#     try:
+#         isaac = get_isaac_connection()
+#         result = isaac.send_command("move_prim", {
+#             "prim_path": prim_path,
+#             "position": position,
+#             "orientation": orientation,
+#             "orientation_format": orientation_format
+#         })
+#         
+#         if result.get("status") == "success":
+#             prev_pos = result.get("previous_position", [])
+#             prev_quat = result.get("previous_quaternion", [])
+#             new_pos = result.get("new_position", [])
+#             new_quat = result.get("new_quaternion", [])
+#             
+#             response = f"Successfully moved {prim_path}:\n\n"
+#             
+#             response += f"Previous Pose:\n"
+#             response += f"  Position: [{prev_pos[0]:.3f}, {prev_pos[1]:.3f}, {prev_pos[2]:.3f}]\n"
+#             response += f"  Quaternion: [{prev_quat[0]:.3f}, {prev_quat[1]:.3f}, {prev_quat[2]:.3f}, {prev_quat[3]:.3f}]\n\n"
+#             
+#             response += f"New Pose:\n"
+#             response += f"  Position: [{new_pos[0]:.3f}, {new_pos[1]:.3f}, {new_pos[2]:.3f}]\n"
+#             response += f"  Quaternion: [{new_quat[0]:.3f}, {new_quat[1]:.3f}, {new_quat[2]:.3f}, {new_quat[3]:.3f}]\n"
+#             response += f"  Orientation Format: {result.get('orientation_format', 'degrees')}"
+#             
+#             return response
+#         else:
+#             return f"Error moving prim: {result.get('message', 'Unknown error')}"
+#             
+#     except Exception as e:
+#         logger.error(f"Error moving prim: {str(e)}")
+#         return f"Error moving prim: {str(e)}"
 
 
 
