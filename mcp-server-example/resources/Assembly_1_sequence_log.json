@@ -1,0 +1,23 @@
+{
+  "assembled_into": "base_3",
+  "sequence": [
+    {
+      "sequence_id": 1,
+      "object_name": "Line_Brown",
+      "tools_trials": [
+        {
+          "trial_id": 1,
+          "grasp_id": 1,
+          "gripper_state": "open",
+          "tools": [
+            "move_to_grasp",
+            "move_to_object",
+            "control_gripper close",
+            "move_to_safe_height"
+          ],
+          "result": "SUCCESS"
+        }
+      ]
+    }
+  ]
+}

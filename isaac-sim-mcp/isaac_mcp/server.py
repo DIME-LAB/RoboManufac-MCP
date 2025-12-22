@@ -231,7 +231,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
 # Create the MCP server with lifespan support
 mcp = FastMCP(
     "IsaacSimMCP",
-    description="Isaac Sim integration through the Model Context Protocol",
+    #description="Isaac Sim integration through the Model Context Protocol",
     lifespan=server_lifespan
 )
 

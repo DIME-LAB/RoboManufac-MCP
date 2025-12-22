@@ -130,8 +130,96 @@ Reason for failure and retry object manipulation with a different tool sequence 
 As you assemble the parts, log your findings in the resources - Both success and failure.
 """
 
+
 @mcp.prompt()
-def level2_assembly_prompt_v1() -> str:
+def level2_system_prompt_grasp_id_given():
+    return"""
+You are using Sim environment.
+Before starting any task, get_topics to find the objects available in the scene. Save current scene state.
+Then identify available grasp ids per object from your available resources.
+
+Your goal is to assemble the objects with the base.
+You are to figure out the sequence of tools to be executed in order for each object in the sequence.
+
+The object sequence for assembly is:
+1) line_red: Use Grasp ID 1.
+2) line_brown: Use Grasp ID 1.
+3) fork_yellow: Use Grasp ID 6.
+4) fork_orange: Use Grasp ID 6.
+
+Once you think you've assembled an object, verify final pose assembly.
+If your sequence for an object was a success, save scene state after the object is assembled.
+If your sequence for an object was a failure, restore scene state to the state before the object was assembled. 
+Reason for failure and retry object manipulation with a different tool sequence which you haven't tried yet for this object.
+
+As you assemble the parts, log your findings in the resources - Both success and failure.
+"""
+
+
+@mcp.prompt()
+def level2_system_prompt_instruction_following():
+    return"""
+You are using Sim environment.
+Before starting any task, get_topics to find the objects available in the scene. Save current scene state.
+Then identify available grasp ids per object from your available resources.
+
+Your goal is to assemble the objects with the base. Start the task by moving to the home position.
+Remember to half open the gripper to release the object, once you are done with any placement or insertion task.
+Verify positional accuracy after performing each object's sequence. If verification fails, reset the scene to the previous object's successful state.
+
+The object and task sequence for the assembly is:
+1) line_red: Use Grasp ID 1. Grasp the object, translate it, reorient the object (if needed) and then translate for assembly and insert it.  
+2) line_brown: Use Grasp ID 1. Grasp the object, translate it, reorient the object (if needed) and then translate for assembly and insert it.
+3) fork_yellow: Use Grasp ID 6. Grasp the object, reorient it, move to regrasp position and place the object. Grasp the object from new position, then translate and reorient the object for assembly and insert it.
+4) fork_orange: Use Grasp ID 6. Grasp the object, reorient it, move to regrasp position and place the object. Grasp the object from new position, then translate and reorient the object for assembly and insert it.
+
+Once you are done with the task and verified, log your assembly results at the end of the verified assembly.
+"""
+
+
+
+@mcp.prompt()
+def phase_4_perform_assembly_sequence(mode: str = "real") -> str:
+    """
+    Returns a prompt for performing assembly based on assembly log data.
+
+    Args:
+        mode: The environment mode - either "sim" or "real" (default: "real")
+    """
+    environment = "sim environment" if mode == "sim" else "real environment"
+    world_context = "simulation" if mode == "sim" else "real world"
+
+    return f"""**Initialize:**
+
+You are working in a {environment}.
+Read the assembly log to identify the objects you are dealing with.
+
+**Task**
+
+You are to perform assembly of the objects onto a fixed base in the {world_context} based on the data assembly resource collected using a Digital twin from your previous runs.
+
+**Execution**
+
+Use the available tools to perform assembly using the information of the assembly log in the same order. Do not skip any object assembly sequence.
+Follow the sequence of objects and the tool calls with arguements to perform assembly one by one.
+When performing assembly onto the base, half open gripper as to not disturb the previously placed parts.
+Verify assembly after each object assembly.
+Move home after all objects are assembled.
+
+**Verification**
+
+> To verify if an assembly was successful: run verify assembly once you you've ran all tools required to move one object into the fixed base.
+> 1.**SUCCESS**: verify assembly returns success.
+> 2.**FAILURE**: verify assembly returns failure. Pause and Request for assistance on further instructions.
+
+**Output**
+
+Fully assembled Assembly in the {world_context}."""
+ 
+
+
+@mcp.prompt()
+def assembly3_grasp_logs() -> str:
     """
     Returns a prompt with generalized instructions for manipulating and 
     assembling objects using pre-defined motion primitives.
@@ -139,8 +227,131 @@ def level2_assembly_prompt_v1() -> str:
     :return: Description
     :rtype: str
     """
-    return"""
-    
+    return"""{
+  "fork_orange": [
+    {
+      "grasp_id": 1,
+      "gripper_state": "half-open",
+      "status": "SUCCESS"
+    },
+    {
+      "grasp_id": 2,
+      "gripper_state": "open",
+      "status": "FAILURE"
+    },
+    {
+      "grasp_id": 2,
+      "gripper_state": "half-open",
+      "status": "FAILURE"
+    },
+    {
+      "grasp_id": 3,
+      "gripper_state": "open",
+      "status": "FAILURE"
+    },
+    {
+      "grasp_id": 3,
+      "gripper_state": "half-open",
+      "status": "FAILURE"
+    },
+    {
+      "grasp_id": 4,
+      "gripper_state": "open",
+      "status": "FAILURE"
+    },
+    {
+      "grasp_id": 4,
+      "gripper_state": "half-open",
+      "status": "SUCCESS"
+    },
+    {
+      "grasp_id": 5,
+      "gripper_state": "open",
+      "status": "FAILURE"
+    },
+    {
+      "grasp_id": 5,
+      "gripper_state": "half-open",
+      "status": "FAILURE"
+    },
+    {
+      "grasp_id": 6,
+      "gripper_state": "open",
+      "status": "SUCCESS"
+    },
+    {
+      "grasp_id": 7,
+      "gripper_state": "open",
+      "status": "FAILURE"
+    },
+    {
+      "grasp_id": 7,
+      "gripper_state": "half-open",
+      "status": "FAILURE"
+    },
+    {
+      "grasp_id": 8,
+      "gripper_state": "open",
+      "status": "FAILURE"
+    },
+    {
+      "grasp_id": 8,
+      "gripper_state": "half-open",
+      "status": "SUCCESS"
+    },
+    {
+      "grasp_id": 9,
+      "gripper_state": "open",
+      "status": "FAILURE"
+    },
+    {
+      "grasp_id": 9,
+      "gripper_state": "half-open",
+      "status": "FAILURE"
+    }
+  ],
+  "fork_yellow": [
+    {
+      "grasp_id": 1,
+      "gripper_state": "open",
+      "status": "FAILURE"
+    },
+    {
+      "grasp_id": 1,
+      "gripper_state": "half-open",
+      "status": "SUCCESS"
+    },
+    {
+      "grasp_id": 4,
+      "gripper_state": "half-open",
+      "status": "SUCCESS"
+    },
+    {
+      "grasp_id": 6,
+      "gripper_state": "open",
+      "status": "SUCCESS"
+    },
+    {
+      "grasp_id": 8,
+      "gripper_state": "half-open",
+      "status": "SUCCESS"
+    }
+  ],
+  "line_brown": [
+    {
+      "grasp_id": 1,
+      "gripper_state": "open",
+      "status": "SUCCESS"
+    }
+  ],
+  "line_red": [
+    {
+      "grasp_id": 1,
+      "gripper_state": "open",
+      "status": "SUCCESS"
+    }
+  ]
+}   
 """
 
 

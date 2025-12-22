@@ -554,7 +554,8 @@ class DigitalTwin(omni.ext.IExt):
         x_range=(-0.2, 0.6),
         y_range=(-0.6, -0.3),
         min_sep=0.2,
-        yaw_range=(0.0, 180.0),
+        yaw_range=(-90.0, 90.0),
+        roll_options=(-90.0, 0.0),
         z_values=None,
         fixed_positions=None,
         max_attempts=10_000,
@@ -568,6 +569,7 @@ class DigitalTwin(omni.ext.IExt):
             y_range: Y position range in world frame (default: -0.5 to 0.0)
             min_sep: Minimum separation between objects
             yaw_range: Yaw rotation range in degrees
+            roll_options: Iterable of discrete roll angles (degrees) to sample from
             z_values: List of Z values for each object (preserves current Z)
             fixed_positions: List of fixed positions (e.g., base objects) to avoid
             max_attempts: Maximum placement attempts
@@ -600,11 +602,13 @@ class DigitalTwin(omni.ext.IExt):
             
             if valid:
                 yaw_deg = np.random.uniform(*yaw_range)
+                roll_deg = float(np.random.choice(roll_options))
                 # Use provided Z value or default
                 z = z_values[len(poses)] if z_values and len(poses) < len(z_values) else 0.0495
                 poses.append({
                     "position": np.array([candidate_xy[0], candidate_xy[1], z]),
-                    "yaw_deg": yaw_deg
+                    "yaw_deg": yaw_deg,
+                    "roll_deg": roll_deg
                 })
         if len(poses) < num_objects:
             raise RuntimeError("Could not place all objects without violating min_sep; reduce density.")
@@ -677,6 +681,7 @@ class DigitalTwin(omni.ext.IExt):
             parent_world_pos = parent_world_transform.ExtractTranslation()
             
             object_info.append({
+                "name": obj,
                 "parent_path": parent_path,
                 "child_path": child_path,
                 "parent_world_pos": parent_world_pos,
@@ -706,11 +711,13 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Randomization will respect {len(base_positions)} base object positions for minimum separation")
 
         # Apply randomized poses
+        roll_excluded = {"line_brown", "line_red"}
         for obj_info, pose in zip(object_info, poses):
             parent_path = obj_info["parent_path"]
             child_path = obj_info["child_path"]
             parent_world_transform = obj_info["parent_world_transform"]
             parent_world_pos = obj_info["parent_world_pos"]
+            obj_name = obj_info["name"]
             
             # Target world position (randomized)
             target_world_pos = Gf.Vec3d(pose["position"][0], pose["position"][1], pose["position"][2])
@@ -723,8 +730,9 @@ class DigitalTwin(omni.ext.IExt):
             parent_inverse = parent_world_transform.GetInverse()
             local_pos = parent_inverse.Transform(target_world_pos)
             
-            # Convert yaw to quaternion
-            quat_xyzw = R.from_euler("xyz", [0.0, 0.0, pose["yaw_deg"]], degrees=True).as_quat()
+            # Convert roll/yaw to quaternion (pitch fixed at 0)
+            roll_deg = 0.0 if obj_name in roll_excluded else pose["roll_deg"]
+            quat_xyzw = R.from_euler("xyz", [roll_deg, 0.0, pose["yaw_deg"]], degrees=True).as_quat()
             quat_wxyz = np.roll(quat_xyzw, 1)
             
             # Apply local transform to child prim (parent prim stays unchanged)

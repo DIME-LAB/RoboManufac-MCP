@@ -172,12 +172,14 @@ class CameraOmniGraphSetup():
     def create_additional_camera_actiongraph(self):
         """Create ActionGraph for additional camera ROS2 publishing"""
         # Check which cameras exist and create action graphs accordingly
-        is_exocentric = self._exocentric_checkbox.model.get_value_as_bool()
-        is_custom = self._custom_checkbox.model.get_value_as_bool()
+        #is_exocentric = self._exocentric_checkbox.model.get_value_as_bool()
+        #is_custom = self._custom_checkbox.model.get_value_as_bool()
+        is_exocentric=True
+        is_custom=False
 
         if is_exocentric:
             # TODO: Copy other camera properties into exocentric camera (e.g., from Intel camera setup)
-            self.cam_og_setup._create_camera_actiongraph(
+            self._create_camera_actiongraph(
                 "/World/exocentric_camera", 
                 1280, 720, 
                 "exocentric_camera", 
@@ -185,7 +187,7 @@ class CameraOmniGraphSetup():
             )
         
         if is_custom:
-            self.cam_og_setup._create_camera_actiongraph(
+            self._create_camera_actiongraph(
                 "/World/custom_camera", 
                 640, 480, 
                 "custom_camera", 

@@ -1,0 +1,125 @@
+{
+  "fork_orange": [
+    {
+      "grasp_id": 1,
+      "gripper_state": "half-open",
+      "result": "SUCCESS"
+    },
+    {
+      "grasp_id": 2,
+      "gripper_state": "open",
+      "result": "FAILURE"
+    },
+    {
+      "grasp_id": 2,
+      "gripper_state": "half-open",
+      "result": "FAILURE"
+    },
+    {
+      "grasp_id": 3,
+      "gripper_state": "open",
+      "result": "FAILURE"
+    },
+    {
+      "grasp_id": 3,
+      "gripper_state": "half-open",
+      "result": "FAILURE"
+    },
+    {
+      "grasp_id": 4,
+      "gripper_state": "open",
+      "result": "FAILURE"
+    },
+    {
+      "grasp_id": 4,
+      "gripper_state": "half-open",
+      "result": "SUCCESS"
+    },
+    {
+      "grasp_id": 5,
+      "gripper_state": "open",
+      "result": "FAILURE"
+    },
+    {
+      "grasp_id": 5,
+      "gripper_state": "half-open",
+      "result": "FAILURE"
+    },
+    {
+      "grasp_id": 6,
+      "gripper_state": "open",
+      "result": "SUCCESS"
+    },
+    {
+      "grasp_id": 7,
+      "gripper_state": "open",
+      "result": "FAILURE"
+    },
+    {
+      "grasp_id": 7,
+      "gripper_state": "half-open",
+      "result": "FAILURE"
+    },
+    {
+      "grasp_id": 8,
+      "gripper_state": "open",
+      "result": "FAILURE"
+    },
+    {
+      "grasp_id": 8,
+      "gripper_state": "half-open",
+      "result": "SUCCESS"
+    },
+    {
+      "grasp_id": 9,
+      "gripper_state": "open",
+      "result": "FAILURE"
+    },
+    {
+      "grasp_id": 9,
+      "gripper_state": "half-open",
+      "result": "FAILURE"
+    }
+  ],
+  "fork_yellow": [
+    {
+      "grasp_id": 1,
+      "gripper_state": "open",
+      "result": "FAILURE"
+    },
+    {
+      "grasp_id": 1,
+      "gripper_state": "half-open",
+      "result": "SUCCESS"
+    },
+    {
+      "grasp_id": 4,
+      "gripper_state": "half-open",
+      "result": "SUCCESS"
+    },
+    {
+      "grasp_id": 6,
+      "gripper_state": "open",
+      "result": "SUCCESS"
+    },
+    {
+      "grasp_id": 8,
+      "gripper_state": "half-open",
+      "result": "SUCCESS"
+    }
+  ],
+  "line_brown": [
+    {
+      "grasp_id": 1,
+      "gripper_state": "open",
+      "result": "SUCCESS"
+    }
+  ],
+  "line_red": [
+    {
+      "grasp_id": 1,
+      "gripper_state": "open",
+      "result": "SUCCESS"
+    }
+  ]
+}
